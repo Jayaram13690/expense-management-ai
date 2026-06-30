@@ -56,6 +56,7 @@ def test_configuration():
             LogLevel,
             ValidationStatus,
         )
+
         # isort: on
 
         # isort: on
