@@ -45,11 +45,13 @@ class ClaimStatus(Enum):
 
     DRAFT = "draft"
     SUBMITTED = "submitted"
+    UNDER_VALIDATION = "under_validation"
+    VALIDATED = "validated"
     UNDER_REVIEW = "under_review"
     APPROVED = "approved"
     REJECTED = "rejected"
-    PAID = "paid"
-    CANCELLED = "cancelled"
+    REIMBURSED = "reimbursed"
+    CLOSED = "closed"
 
 
 class ApprovalStatus(Enum):

@@ -22,7 +22,7 @@ class AWSSettings(BaseSettings):
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "amazon.nova-lite-v1:0"
 
-    model_config = SettingsConfigDict(env_prefix="AWS_", env_file=".env", extra="forbid")
+    model_config = SettingsConfigDict(env_prefix="AWS_", extra="forbid")
 
 
 class DynamoDBSettings(BaseSettings):
@@ -51,7 +51,7 @@ class DynamoDBSettings(BaseSettings):
             raise ValueError("Table name cannot be empty")
         return v
 
-    model_config = SettingsConfigDict(env_prefix="DYNAMODB_", env_file=".env", extra="forbid")
+    model_config = SettingsConfigDict(env_prefix="DYNAMODB_", extra="forbid")
 
 
 class LoggingSettings(BaseSettings):
@@ -63,7 +63,7 @@ class LoggingSettings(BaseSettings):
 
     log_level: LogLevel = LogLevel.INFO
 
-    model_config = SettingsConfigDict(env_prefix="LOGGING_", env_file=".env", extra="forbid")
+    model_config = SettingsConfigDict(env_prefix="LOGGING_", extra="forbid")
 
 
 class WorkflowSettings(BaseSettings):
@@ -98,13 +98,13 @@ class WorkflowSettings(BaseSettings):
         return v
 
     @field_validator("retry_backoff_factor")
-    def validate_backoff_factor(cls, v):
+    def validate_backoff_factor(cls, v: int) -> int:
         """Validate that backoff factor is positive."""
         if v <= 0:
             raise ValueError("Retry backoff factor must be greater than 0")
         return v
 
-    model_config = SettingsConfigDict(env_prefix="WORKFLOW_", env_file=".env", extra="forbid")
+    model_config = SettingsConfigDict(env_prefix="WORKFLOW_", extra="forbid")
 
 
 class ApplicationSettings(BaseSettings):
@@ -136,7 +136,7 @@ class ApplicationSettings(BaseSettings):
             raise ValueError("Application version cannot be empty")
         return v
 
-    model_config = SettingsConfigDict(env_prefix="APP_", env_file=".env", extra="forbid")
+    model_config = SettingsConfigDict(env_prefix="APP_", extra="forbid")
 
 
 class Settings(BaseSettings):
@@ -159,11 +159,23 @@ class Settings(BaseSettings):
     logging: LoggingSettings = LoggingSettings()
     workflow: WorkflowSettings = WorkflowSettings()
 
-    model_config = SettingsConfigDict(env_file=".env", extra="forbid")
+    model_config = SettingsConfigDict(extra="forbid")
+
+    @classmethod
+    def load_from_env(cls):
+        """Load settings from environment variables and .env file."""
+        from dotenv import load_dotenv
+
+        # Load environment variables from .env file
+        load_dotenv()
+
+        # Create settings instance
+        settings = cls()
+        return settings
 
 
 # Singleton instance for global access
-settings = Settings()
+settings = Settings.load_from_env()
 
 
 __all__ = ["settings", "Settings"]
