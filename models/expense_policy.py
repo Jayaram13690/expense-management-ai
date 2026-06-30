@@ -1,0 +1,60 @@
+"""
+Expense policy domain model.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+
+from pydantic import Field
+
+from common.identifiers import PolicyId
+from config.enums import ExpenseCategory
+from models.base import BaseEntity
+
+
+class ExpensePolicy(BaseEntity):
+    """
+    Expense reimbursement policy.
+    """
+
+    policy_id: PolicyId
+
+    grade: str
+
+    expense_category: ExpenseCategory
+
+    daily_limit: Decimal = Field(
+        ...,
+        gt=0,
+    )
+
+    monthly_limit: Decimal = Field(
+        ...,
+        gt=0,
+    )
+
+    receipt_required: bool = True
+
+    approval_required: bool = True
+
+    currency: str = "USD"
+
+    effective_from: date
+
+    effective_to: date
+
+    description: str | None = None
+
+    def is_effective(self, current_date: date) -> bool:
+        """
+        Check whether policy is active.
+        """
+        return self.effective_from <= current_date <= self.effective_to
+
+    def is_amount_allowed(self, amount: Decimal) -> bool:
+        """
+        Validate reimbursement amount.
+        """
+        return amount <= self.daily_limit

@@ -12,8 +12,8 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
-from ..config.enums import LogLevel
-from ..config.settings import settings
+from config.enums import LogLevel
+from config.settings import settings
 
 
 class EnterpriseLogger:
