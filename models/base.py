@@ -17,7 +17,7 @@ Architecture:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -139,18 +139,21 @@ class BaseEntity(AuditEntity):
         """
         Convert entity into a DynamoDB-compatible dictionary.
 
-        UUIDs and datetimes are converted into strings.
+        UUIDs, datetimes, and dates are converted into strings.
 
         Returns:
             DynamoDB-ready dictionary.
         """
-        item = self.model_dump(mode="python")
+        item = self.model_dump(
+            mode="python",
+            exclude_computed_fields=True,
+        )
 
         for key, value in item.items():
             if isinstance(value, UUID):
                 item[key] = str(value)
 
-            elif isinstance(value, datetime):
+            elif isinstance(value, (datetime, date)):
                 item[key] = value.isoformat()
 
         return item

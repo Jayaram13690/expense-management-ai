@@ -60,7 +60,7 @@ class Employee(BaseEntity):
 
     employment_type: EmploymentType = EmploymentType.FULL_TIME
 
-    preferred_currency: str = "USD"
+    preferred_currency: str = "INR"
 
     @computed_field
     @property
