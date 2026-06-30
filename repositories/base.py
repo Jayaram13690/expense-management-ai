@@ -1,109 +1,305 @@
 """
-Base Repository.
+Base repository implementation.
 
-Provides common CRUD functionality for all repositories.
+Provides generic CRUD operations for DynamoDB-backed repositories.
+
+Every repository in the application should inherit from BaseRepository.
 """
 
 from __future__ import annotations
 
-from abc import ABC
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from botocore.exceptions import ClientError
+from pydantic import BaseModel
 
-from database import get_dynamodb_resource
-from exceptions import DatabaseException
+from database.dynamodb import get_dynamodb_resource
+from exceptions.repository import RepositoryException
 from utils.logger import get_logger
 
+logger = get_logger(__name__)
 
-class BaseRepository(ABC):
+T = TypeVar("T", bound=BaseModel)
+
+
+class BaseRepository(Generic[T]):
     """
-    Base repository.
+    Generic DynamoDB repository.
 
-    All repositories inherit from this class.
+    Responsibilities
+    ----------------
+    - Create
+    - Read
+    - Update
+    - Delete
+    - Exists
+    - Scan
+    - Query
+
+    Child repositories should only implement
+    business-specific query methods.
     """
 
-    def __init__(self, table_name: str):
+    def __init__(
+        self,
+        *,
+        table_name: str,
+        partition_key: str,
+        model_class: type[T],
+    ) -> None:
 
-        self.logger = get_logger(self.__class__.__name__)
+        self.table_name = table_name
 
-        self.table = get_dynamodb_resource().Table(table_name)
+        self.partition_key = partition_key
+
+        self.model_class = model_class
+
+        self.resource = get_dynamodb_resource()
+
+        self.table = self.resource.Table(table_name)
+
+    ###########################################################################
+    # Create
+    ###########################################################################
+
+    def create(
+        self,
+        entity: T,
+    ) -> T:
+        """
+        Persist a new entity.
+        """
+
+        try:
+            logger.info(
+                "Creating entity in table '%s'.",
+                self.table_name,
+            )
+
+            if hasattr(entity, "to_dynamodb_item"):
+                item = entity.to_dynamodb_item()
+
+            else:
+                item = entity.model_dump(mode="python")
+
+            self.table.put_item(
+                Item=item,
+            )
+
+            return entity
+
+        except ClientError as ex:
+            raise RepositoryException(
+                message=f"Failed creating entity in '{self.table_name}'.",
+                cause=ex,
+            ) from ex
+
+    ###########################################################################
+    # Get
+    ###########################################################################
+
+    def get(
+        self,
+        partition_value: Any,
+    ) -> T | None:
+        """
+        Retrieve an entity by primary key.
+        """
+
+        try:
+            response = self.table.get_item(
+                Key={
+                    self.partition_key: partition_value,
+                }
+            )
+
+            item = response.get("Item")
+
+            if item is None:
+                return None
+
+            return self.model_class.from_dict(item)
+
+        except ClientError as ex:
+            raise RepositoryException(
+                message=f"Failed reading from '{self.table_name}'.",
+                cause=ex,
+            ) from ex
+
+    ###########################################################################
+    # Update
+    ###########################################################################
+
+    def update(
+        self,
+        entity: T,
+    ) -> T:
+        """
+        Replace an existing entity.
+        """
+
+        try:
+            logger.info(
+                "Updating entity in '%s'.",
+                self.table_name,
+            )
+
+            if hasattr(entity, "touch"):
+                entity.touch()
+
+            if hasattr(entity, "to_dynamodb_item"):
+                item = entity.to_dynamodb_item()
+
+            else:
+                item = entity.model_dump(mode="python")
+
+            self.table.put_item(
+                Item=item,
+            )
+
+            return entity
+
+        except ClientError as ex:
+            raise RepositoryException(
+                message=f"Failed updating '{self.table_name}'.",
+                cause=ex,
+            ) from ex
+
+    ###########################################################################
+    # Delete
+    ###########################################################################
+
+    def delete(
+        self,
+        partition_value: Any,
+    ) -> None:
+        """
+        Delete an entity.
+        """
+
+        try:
+            logger.info(
+                "Deleting entity from '%s'.",
+                self.table_name,
+            )
+
+            self.table.delete_item(
+                Key={
+                    self.partition_key: partition_value,
+                }
+            )
+
+        except ClientError as ex:
+            raise RepositoryException(
+                message=f"Failed deleting from '{self.table_name}'.",
+                cause=ex,
+            ) from ex
+
+    ###########################################################################
+    # Exists
+    ###########################################################################
 
     def exists(
         self,
-        partition_key: str,
-        value: str,
+        partition_value: Any,
     ) -> bool:
         """
-        Check whether an item exists.
+        Determine whether an entity exists.
+        """
+
+        return self.get(partition_value) is not None
+
+    ###########################################################################
+    # Scan
+    ###########################################################################
+
+    def scan(self) -> list[T]:
+        """
+        Scan an entire table.
         """
 
         try:
-            response = self.table.get_item(Key={partition_key: value})
+            response = self.table.scan()
 
-            return "Item" in response
+            items = response.get("Items", [])
+
+            return [self.model_class.from_dict(item) for item in items]
 
         except ClientError as ex:
-            raise DatabaseException(
-                message="Failed checking item existence.",
-                error_code="DB_EXISTS_FAILED",
+            raise RepositoryException(
+                message=f"Failed scanning '{self.table_name}'.",
                 cause=ex,
             ) from ex
 
-    def put_item(
+    ###########################################################################
+    # Query
+    ###########################################################################
+
+    def query(
         self,
-        item: dict[str, Any],
+        **kwargs: Any,
+    ) -> list[T]:
+        """
+        Execute a DynamoDB query.
+
+        kwargs are forwarded directly to boto3.
+        """
+
+        try:
+            response = self.table.query(
+                **kwargs,
+            )
+
+            items = response.get("Items", [])
+
+            return [self.model_class.from_dict(item) for item in items]
+
+        except ClientError as ex:
+            raise RepositoryException(
+                message=f"Failed querying '{self.table_name}'.",
+                cause=ex,
+            ) from ex
+
+    ###########################################################################
+    # Count
+    ###########################################################################
+
+    def count(self) -> int:
+        """
+        Return number of items.
+
+        Intended for administration and diagnostics.
+        """
+
+        return len(self.scan())
+
+    ###########################################################################
+    # Batch Create
+    ###########################################################################
+
+    def batch_create(
+        self,
+        entities: list[T],
     ) -> None:
         """
-        Store item.
+        Persist multiple entities.
         """
 
         try:
-            self.table.put_item(Item=item)
+            with self.table.batch_writer() as batch:
+                for entity in entities:
+                    if hasattr(entity, "to_dynamodb_item"):
+                        batch.put_item(
+                            Item=entity.to_dynamodb_item(),
+                        )
+
+                    else:
+                        batch.put_item(
+                            Item=entity.model_dump(mode="python"),
+                        )
 
         except ClientError as ex:
-            raise DatabaseException(
-                message="Unable to save item.",
-                error_code="DB_PUT_FAILED",
-                cause=ex,
-            ) from ex
-
-    def get_item(
-        self,
-        partition_key: str,
-        value: str,
-    ) -> dict[str, Any] | None:
-        """
-        Retrieve item.
-        """
-
-        try:
-            response = self.table.get_item(Key={partition_key: value})
-
-            return response.get("Item")
-
-        except ClientError as ex:
-            raise DatabaseException(
-                message="Unable to retrieve item.",
-                error_code="DB_GET_FAILED",
-                cause=ex,
-            ) from ex
-
-    def delete_item(
-        self,
-        partition_key: str,
-        value: str,
-    ) -> None:
-        """
-        Delete item.
-        """
-
-        try:
-            self.table.delete_item(Key={partition_key: value})
-
-        except ClientError as ex:
-            raise DatabaseException(
-                message="Unable to delete item.",
-                error_code="DB_DELETE_FAILED",
+            raise RepositoryException(
+                message=f"Failed batch insert into '{self.table_name}'.",
                 cause=ex,
             ) from ex
