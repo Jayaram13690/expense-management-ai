@@ -9,8 +9,7 @@ from decimal import Decimal
 
 from pydantic import Field
 
-from common.identifiers import PolicyId
-from config.enums import ExpenseCategory
+from common.identifiers import CategoryId, PolicyId
 from models.base import BaseEntity
 
 
@@ -21,9 +20,9 @@ class ExpensePolicy(BaseEntity):
 
     policy_id: PolicyId
 
-    grade: str
+    employee_grade: str
 
-    expense_category: ExpenseCategory
+    category_id: CategoryId
 
     daily_limit: Decimal = Field(
         ...,
