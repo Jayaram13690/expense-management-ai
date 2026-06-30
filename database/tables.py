@@ -18,12 +18,12 @@ def get_employees_table():
 
 def get_expense_policies_table():
 
-    return get_dynamodb_resource().Table(settings.dynamodb.expense_policies_table)
+    return get_dynamodb_resource().Table(settings.dynamodb.policies_table)
 
 
 def get_expense_claims_table():
 
-    return get_dynamodb_resource().Table(settings.dynamodb.expense_claims_table)
+    return get_dynamodb_resource().Table(settings.dynamodb.claims_table)
 
 
 def get_receipts_table():

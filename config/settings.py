@@ -5,7 +5,7 @@ This module provides a centralized configuration system that loads settings from
 environment variables and validates them using Pydantic models.
 """
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from config.enums import Environment, LogLevel
@@ -36,11 +36,26 @@ class DynamoDBSettings(BaseSettings):
         receipts_table: Table for receipt storage
     """
 
-    employees_table: str = "Employees"
-    policies_table: str = "Policies"
-    categories_table: str = "Categories"
-    claims_table: str = "Claims"
-    receipts_table: str = "Receipts"
+    employees_table: str = Field(
+        default="expense-ai-employees",
+        validation_alias="EMPLOYEES_TABLE",
+    )
+    policies_table: str = Field(
+        default="expense-ai-expense-policies",
+        validation_alias="EXPENSE_POLICIES_TABLE",
+    )
+    categories_table: str = Field(
+        default="expense-ai-expense-categories",
+        validation_alias="EXPENSE_CATEGORIES_TABLE",
+    )
+    claims_table: str = Field(
+        default="expense-ai-expense-claims",
+        validation_alias="EXPENSE_CLAIMS_TABLE",
+    )
+    receipts_table: str = Field(
+        default="expense-ai-receipts",
+        validation_alias="RECEIPTS_TABLE",
+    )
 
     @field_validator(
         "employees_table", "policies_table", "categories_table", "claims_table", "receipts_table"
