@@ -20,7 +20,7 @@ class AWSSettings(BaseSettings):
     """
 
     aws_region: str = "us-east-1"
-    bedrock_model_id: str = "amazon.nova-lite-v1:0"
+    bedrock_model_id: str = "global.amazon.nova-2-lite-v1:0"
 
     model_config = SettingsConfigDict(env_prefix="AWS_", extra="forbid")
 
