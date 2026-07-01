@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal
 
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, field_validator
 
 from models.base import BaseSchema
 
@@ -75,7 +75,7 @@ class ClaimAmount(BaseSchema):
     )
 
     currency: str = Field(
-        default="USD",
+        default="INR",
         min_length=3,
         max_length=3,
     )
@@ -116,7 +116,6 @@ class ClaimAmount(BaseSchema):
 
         return value
 
-    @computed_field
     @property
     def company_contribution(self) -> Decimal:
         """
@@ -127,7 +126,6 @@ class ClaimAmount(BaseSchema):
         """
         return self.reimbursable_amount
 
-    @computed_field
     @property
     def total_cost(self) -> Decimal:
         """
@@ -138,7 +136,6 @@ class ClaimAmount(BaseSchema):
         """
         return (self.claimed_amount + self.tax_amount).quantize(DECIMAL_PRECISION)
 
-    @computed_field
     @property
     def non_reimbursable_amount(self) -> Decimal:
         """

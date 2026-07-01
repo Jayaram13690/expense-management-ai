@@ -8,6 +8,7 @@ for an expense claim.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from pydantic import Field, field_validator
 
@@ -30,17 +31,17 @@ class ValidationResult(BaseSchema):
 
     status: ValidationStatus = ValidationStatus.PENDING_REVIEW
 
-    confidence_score: float = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
+    confidence_score: Decimal = Field(
+        default=Decimal("1.00"),
+        ge=Decimal("0"),
+        le=Decimal("1"),
         description="AI confidence score.",
     )
 
-    fraud_score: float = Field(
-        default=0.0,
-        ge=0.0,
-        le=1.0,
+    fraud_score: Decimal = Field(
+        default=Decimal("0.00"),
+        ge=Decimal("0"),
+        le=Decimal("1"),
         description="AI fraud probability.",
     )
 
