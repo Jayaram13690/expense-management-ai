@@ -10,6 +10,7 @@ from models.base import AuditEntity, BaseEntity, BaseSchema
 from models.claim_amount import ClaimAmount
 from models.employee import Employee, EmploymentType
 from models.expense_claim import ExpenseClaim
+from models.expense_line_item import ExpenseLineItem, LineItemStatus
 from models.expense_policy import ExpensePolicy
 from models.validation_result import ValidationResult
 from models.workflow_context import WorkflowContext, WorkflowStage
@@ -25,6 +26,8 @@ __all__ = [
     "Approval",
     "ValidationResult",
     "ExpenseClaim",
+    "ExpenseLineItem",
+    "LineItemStatus",
     "WorkflowContext",
     "WorkflowStage",
 ]

@@ -13,6 +13,12 @@ Architecture:
     BaseSchema
         └── AuditEntity
                 └── BaseEntity
+
+Notes:
+    _deep_serialize() is a module-level utility that recursively converts
+    Python types unsupported by DynamoDB (UUID, date, datetime) to strings.
+    This is required for aggregates containing nested value objects with
+    date fields — for example, ExpenseClaim.expense_line_items.
 """
 
 from __future__ import annotations
@@ -22,6 +28,37 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+def _deep_serialize(value: Any) -> Any:
+    """
+    Recursively convert a Python value to a DynamoDB-compatible type.
+
+    DynamoDB's boto3 resource interface does not support UUID, date, or
+    datetime objects.  This function walks nested dicts and lists so that
+    all occurrences are replaced with their string equivalents, regardless
+    of nesting depth.
+
+    Args:
+        value:
+            Any Python value produced by Pydantic's model_dump().
+
+    Returns:
+        A DynamoDB-compatible value of the same shape.
+    """
+    if isinstance(value, dict):
+        return {k: _deep_serialize(v) for k, v in value.items()}
+
+    if isinstance(value, list):
+        return [_deep_serialize(v) for v in value]
+
+    if isinstance(value, UUID):
+        return str(value)
+
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    return value
 
 
 def utc_now() -> datetime:
@@ -139,21 +176,13 @@ class BaseEntity(AuditEntity):
         """
         Convert entity into a DynamoDB-compatible dictionary.
 
-        UUIDs, datetimes, and dates are converted into strings.
+        All UUID, date, and datetime values — including those nested inside
+        lists or dicts (e.g. expense_line_items) — are converted to their
+        ISO-8601 string representations via _deep_serialize().
 
         Returns:
             DynamoDB-ready dictionary.
         """
-        item = self.model_dump(
-            mode="python",
-            exclude_computed_fields=True,
-        )
+        item = self.model_dump(mode="python")
 
-        for key, value in item.items():
-            if isinstance(value, UUID):
-                item[key] = str(value)
-
-            elif isinstance(value, (datetime, date)):
-                item[key] = value.isoformat()
-
-        return item
+        return _deep_serialize(item)

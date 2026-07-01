@@ -3,12 +3,18 @@ Application enums.
 
 This module contains strongly typed enumerations used throughout the
 application to ensure type safety and avoid magic strings.
+
+All string-valued enums inherit from StrEnum so that enum members compare
+equal to their string values.  This is required because BaseSchema sets
+use_enum_values=True, which causes Pydantic to store the raw string value
+rather than the enum member.  Without StrEnum, comparisons such as
+``self.status != ClaimStatus.DRAFT`` would always be True (str vs Enum).
 """
 
-from enum import Enum
+from enum import StrEnum
 
 
-class Environment(Enum):
+class Environment(StrEnum):
     """Application environment enumeration.
 
     Represents the different deployment environments for the application.
@@ -20,7 +26,7 @@ class Environment(Enum):
     TESTING = "testing"
 
 
-class ExpenseCategory(Enum):
+class ExpenseCategory(StrEnum):
     """Expense category enumeration.
 
     Represents the different categories of travel expenses that can be claimed.
@@ -37,7 +43,7 @@ class ExpenseCategory(Enum):
     MISCELLANEOUS = "miscellaneous"
 
 
-class ClaimStatus(Enum):
+class ClaimStatus(StrEnum):
     """Claim status enumeration.
 
     Represents the different states a claim can be in during its lifecycle.
@@ -54,7 +60,7 @@ class ClaimStatus(Enum):
     CLOSED = "closed"
 
 
-class ApprovalStatus(Enum):
+class ApprovalStatus(StrEnum):
     """Approval status enumeration.
 
     Represents the approval status of claims and individual expenses.
@@ -66,7 +72,7 @@ class ApprovalStatus(Enum):
     REQUIRES_MORE_INFO = "requires_more_info"
 
 
-class ValidationStatus(Enum):
+class ValidationStatus(StrEnum):
     """Validation status enumeration.
 
     Represents the validation status of expense claims and receipts.
@@ -79,7 +85,7 @@ class ValidationStatus(Enum):
     FLAGGED = "flagged"
 
 
-class LogLevel(Enum):
+class LogLevel(StrEnum):
     """Log level enumeration.
 
     Represents the different severity levels for logging.

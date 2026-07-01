@@ -6,7 +6,7 @@ Every custom application exception must inherit from ApplicationException.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from utils.context import (
@@ -17,7 +17,7 @@ from utils.context import (
 
 def utc_now() -> datetime:
     """Return current UTC timestamp."""
-    return datetime.now(timezone.UTC)
+    return datetime.now(UTC)
 
 
 class ApplicationException(Exception):
