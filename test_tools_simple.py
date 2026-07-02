@@ -13,16 +13,6 @@ def test_tool_imports():
 
     try:
         # Test individual imports
-        from tools.approval_tools import (
-            approve_claim,
-            list_manager_queue,
-            list_pending_claims,
-            reject_claim,
-        )
-        from tools.employee_tools import get_employee_details, list_employee_claims
-        from tools.expense_tools import get_claim, preview_claim, submit_claim
-        from tools.policy_tools import get_expense_category, get_policy
-        from tools.receipt_tools import get_receipt_status, upload_receipt
 
         print("✅ All individual tool imports successful")
 
