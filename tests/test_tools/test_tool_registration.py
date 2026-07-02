@@ -4,9 +4,7 @@ Test Tool Registration.
 Verify that every tool is properly decorated with the Strands @tool decorator.
 """
 
-from unittest.mock import patch
 
-import pytest
 
 
 def test_expense_tools_registration():

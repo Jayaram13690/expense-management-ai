@@ -8,8 +8,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from common.identifiers import EmployeeId
-
 
 @pytest.fixture
 def mock_employee_service():

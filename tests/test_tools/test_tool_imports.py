@@ -4,7 +4,6 @@ Test Tool Imports.
 Verify that all tool modules import successfully and exports are correct.
 """
 
-import pytest
 
 
 def test_tools_package_import():
