@@ -51,10 +51,6 @@ class ClaimPreview(BaseSchema):
 
     approval_required: bool
 
-    items: list[ExpenseItemResult] = Field(
-        default_factory=list
-    )
+    items: list[ExpenseItemResult] = Field(default_factory=list)
 
-    warnings: list[str] = Field(
-        default_factory=list
-    )
+    warnings: list[str] = Field(default_factory=list)

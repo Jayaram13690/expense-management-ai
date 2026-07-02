@@ -5,8 +5,6 @@ Verify that every tool is properly decorated with the Strands @tool decorator.
 """
 
 
-
-
 def test_expense_tools_registration():
     """Test that expense tools are properly registered with @tool decorator."""
     from tools.expense_tools import get_claim, preview_claim, submit_claim

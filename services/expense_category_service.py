@@ -39,20 +39,15 @@ class ExpenseCategoryService(BaseService):
 
         self.log_start("Get Expense Category")
 
-        category = self.category_repository.get_by_category_id(
-            category_id
-        )
+        category = self.category_repository.get_by_category_id(category_id)
 
         if category is None:
-
             self.log_failure(
                 "Get Expense Category",
                 f"Category '{category_id}' does not exist.",
             )
 
-            raise RepositoryException(
-                message=f"Category '{category_id}' does not exist."
-            )
+            raise RepositoryException(message=f"Category '{category_id}' does not exist.")
 
         self.log_success("Get Expense Category")
 
@@ -68,20 +63,15 @@ class ExpenseCategoryService(BaseService):
 
         self.log_start("Get Expense Category By Code")
 
-        category = self.category_repository.get_by_category_code(
-            category_code
-        )
+        category = self.category_repository.get_by_category_code(category_code)
 
         if category is None:
-
             self.log_failure(
                 "Get Expense Category By Code",
                 f"Category '{category_code}' does not exist.",
             )
 
-            raise RepositoryException(
-                message=f"Category '{category_code}' does not exist."
-            )
+            raise RepositoryException(message=f"Category '{category_code}' does not exist.")
 
         self.log_success("Get Expense Category By Code")
 
@@ -95,9 +85,7 @@ class ExpenseCategoryService(BaseService):
         Check whether a category exists.
         """
 
-        return self.category_repository.category_exists(
-            category_id
-        )
+        return self.category_repository.category_exists(category_id)
 
     def list_active_categories(
         self,
@@ -108,9 +96,7 @@ class ExpenseCategoryService(BaseService):
 
         self.log_start("List Active Categories")
 
-        categories = (
-            self.category_repository.list_active_categories()
-        )
+        categories = self.category_repository.list_active_categories()
 
         self.log_success("List Active Categories")
 
@@ -137,9 +123,7 @@ class ExpenseCategoryService(BaseService):
         Determine whether receipt is required.
         """
 
-        return self.get_category(
-            category_id
-        ).receipt_required
+        return self.get_category(category_id).receipt_required
 
     def requires_manager_approval(
         self,
@@ -149,9 +133,7 @@ class ExpenseCategoryService(BaseService):
         Determine whether manager approval is required.
         """
 
-        return self.get_category(
-            category_id
-        ).manager_approval_required
+        return self.get_category(category_id).manager_approval_required
 
     def reimbursement_allowed(
         self,
@@ -161,6 +143,4 @@ class ExpenseCategoryService(BaseService):
         Determine whether reimbursement is allowed.
         """
 
-        return self.get_category(
-            category_id
-        ).reimbursement_allowed
+        return self.get_category(category_id).reimbursement_allowed

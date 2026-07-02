@@ -49,7 +49,6 @@ class ExpensePolicyService(BaseService):
         )
 
         if policy is None:
-
             self.log_failure(
                 "Get Expense Policy",
                 (
@@ -79,9 +78,7 @@ class ExpensePolicyService(BaseService):
         Check whether a policy exists.
         """
 
-        return self.policy_repository.policy_exists(
-            policy_id
-        )
+        return self.policy_repository.policy_exists(policy_id)
 
     def list_active_policies(
         self,
@@ -92,9 +89,7 @@ class ExpensePolicyService(BaseService):
 
         self.log_start("List Active Policies")
 
-        policies = (
-            self.policy_repository.list_active_policies()
-        )
+        policies = self.policy_repository.list_active_policies()
 
         self.log_success("List Active Policies")
 

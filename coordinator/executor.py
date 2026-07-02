@@ -27,6 +27,7 @@ from agents.employee_agent import EmployeeAgent
 from agents.expense_agent import ExpenseAgent
 from agents.policy_agent import PolicyAgent
 from agents.receipt_agent import ReceiptAgent
+from coordinator.agent_request_builder import AgentRequestBuilder
 from coordinator.decision import ExecutionMode
 from coordinator.workflow import WorkflowDefinition, WorkflowStep, get_workflow_definition
 
@@ -215,7 +216,11 @@ class WorkflowExecutor:
                     return results
 
                 # Execute the stage and get the raw agent result (or None for non-agent stages)
-                stage_result = self._execute_step(stage, **kwargs)
+                stage_result = self._execute_step(
+                    stage,
+                    workflow_context=kwargs,
+                    previous_results=results.get("results", {}),
+                )
 
                 # Store the stage result
                 results["results"][stage.stage_name] = stage_result
@@ -239,12 +244,20 @@ class WorkflowExecutor:
 
         return results
 
-    def _execute_step(self, step: WorkflowStep, **kwargs: Any) -> Any | None:
+    def _execute_step(
+        self,
+        step: WorkflowStep,
+        workflow_context: dict[str, Any],
+        previous_results: dict[str, Any],
+    ) -> Any | None:
         """
         Execute a single workflow stage by delegating to the appropriate agent.
 
         Args:
-            step: The workflow stage to execute
+            step:
+            The workflow stage to execute
+            workflow_context: Current workflow execution context
+            previous_results: Results from previous workflow stages
             **kwargs: Additional arguments to pass to the agent
 
         Returns:
@@ -266,9 +279,16 @@ class WorkflowExecutor:
         if agent is None:
             raise RuntimeError(f"No agent found for stage '{step.stage_name}': {step.agent_name}")
 
-        # Invoke the agent using its invoke method
+        # Build runtime business request using AgentRequestBuilder
+        request = AgentRequestBuilder.build(
+            workflow_step=step,
+            workflow_context=workflow_context,
+            previous_results=previous_results,
+        )
+
+        # Invoke the agent with the runtime business request
         # Let the agent handle its own execution and return its raw result
-        return agent.invoke(**kwargs)
+        return agent.invoke(request)
 
     def _get_agent_method(self, agent_name: str) -> Any:
         """
@@ -441,7 +461,12 @@ class WorkflowExecutor:
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     # Create a future for each ready stage
                     future_to_stage = {
-                        executor.submit(self._execute_step, stage, **kwargs): stage
+                        executor.submit(
+                            self._execute_step,
+                            stage,
+                            workflow_context=kwargs,
+                            previous_results=results.get("results", {}),
+                        ): stage
                         for stage in ready_stages
                     }
 

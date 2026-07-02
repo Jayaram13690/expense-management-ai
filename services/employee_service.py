@@ -41,9 +41,7 @@ class EmployeeService(BaseService):
 
         self.log_start("Get Employee")
 
-        employee = self.employee_repository.get_by_employee_id(
-            employee_id
-        )
+        employee = self.employee_repository.get_by_employee_id(employee_id)
 
         if employee is None:
             self.log_failure(
@@ -51,9 +49,7 @@ class EmployeeService(BaseService):
                 f"Employee '{employee_id}' does not exist.",
             )
 
-            raise RepositoryException(
-                message=f"Employee '{employee_id}' does not exist."
-            )
+            raise RepositoryException(message=f"Employee '{employee_id}' does not exist.")
 
         self.log_success("Get Employee")
 
@@ -72,15 +68,12 @@ class EmployeeService(BaseService):
         employee = self.employee_repository.get_by_email(email)
 
         if employee is None:
-
             self.log_failure(
                 "Get Employee By Email",
                 f"Employee with email '{email}' does not exist.",
             )
 
-            raise RepositoryException(
-                message=f"Employee with email '{email}' does not exist."
-            )
+            raise RepositoryException(message=f"Employee with email '{email}' does not exist.")
 
         self.log_success("Get Employee By Email")
 
@@ -94,9 +87,7 @@ class EmployeeService(BaseService):
         Check whether an employee exists.
         """
 
-        return self.employee_repository.employee_exists(
-            employee_id
-        )
+        return self.employee_repository.employee_exists(employee_id)
 
     def list_active_employees(
         self,
@@ -107,9 +98,7 @@ class EmployeeService(BaseService):
 
         self.log_start("List Active Employees")
 
-        employees = (
-            self.employee_repository.list_active_employees()
-        )
+        employees = self.employee_repository.list_active_employees()
 
         self.log_success("List Active Employees")
 
