@@ -20,7 +20,7 @@ Design Principles:
 
 from agents.base_agent import BaseAgent
 from prompts.policy_prompt import POLICY_AGENT_SYSTEM_PROMPT
-from tools.policy_tools import get_expense_category, get_policy
+from tools.policy_tools import get_expense_category, check_employee_eligibility, get_category_limits, get_reimbursement_rules, get_policy_by_identifier
 
 
 class PolicyAgent(BaseAgent):
@@ -31,14 +31,17 @@ class PolicyAgent(BaseAgent):
     tools and system prompt for policy information retrieval.
 
     Responsibilities:
-        - Retrieve expense policies by category and employee grade
         - Retrieve expense category details by category code
-        - Provide policy information including reimbursement limits
+        - Retrieve employee eligibility for expense categories
+        - Retrieve expense category limits
+        - Retrieve reimbursement rules
         - Provide category requirements and configurations
 
     Tools:
-        - get_policy: Retrieve policy details by category and employee grade
         - get_expense_category: Retrieve category details by category code
+        - check_employee_eligibility: Check employee eligibility for categories
+        - get_category_limits: Retrieve category spending limits
+        - get_reimbursement_rules: Retrieve reimbursement processing rules
 
     Attributes:
         Inherits all attributes from BaseAgent
@@ -58,7 +61,7 @@ class PolicyAgent(BaseAgent):
         super().__init__(
             model=model,
             system_prompt=POLICY_AGENT_SYSTEM_PROMPT,
-            tools=[get_policy, get_expense_category],
+            tools=[get_policy_by_identifier, get_expense_category, check_employee_eligibility, get_category_limits, get_reimbursement_rules],
             name="PolicyAgent",
             description="Handles policy lookup.",
         )

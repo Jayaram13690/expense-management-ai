@@ -106,9 +106,14 @@ from services.expense_claim_service import ExpenseClaimService
 expense_claim_service = ExpenseClaimService()
 
 
+def _normalize_request(request):
+    if isinstance(request, dict):
+        return SubmitExpenseClaimRequest.model_validate(request)
+    return request
+
 @tool
 def preview_claim(
-    request: SubmitExpenseClaimRequest,
+    request: SubmitExpenseClaimRequest | dict,
 ) -> ClaimPreview:
     """
     Generate a reimbursement preview for an expense claim.
@@ -120,12 +125,14 @@ def preview_claim(
     Returns:
         ClaimPreview containing calculated reimbursement details.
     """
+    request = _normalize_request(request)
+        
     return expense_claim_service.preview_claim(request)
 
 
 @tool
 def submit_claim(
-    request: SubmitExpenseClaimRequest,
+    request: SubmitExpenseClaimRequest | dict,
 ) -> ExpenseClaim:
     """
     Submit a new expense claim.
@@ -137,6 +144,8 @@ def submit_claim(
     Returns:
         Persisted ExpenseClaim.
     """
+    request = _normalize_request(request)
+        
     return expense_claim_service.submit_claim(request)
 
 
@@ -155,3 +164,100 @@ def get_claim(
         ExpenseClaim aggregate.
     """
     return expense_claim_service.get_claim(claim_id)
+
+
+@tool
+def validate_policy_compliance(
+    claim_id: str,
+) -> dict:
+    """
+    Validate policy compliance for a claim.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Policy compliance validation results.
+    """
+    return expense_claim_service.validate_policy_compliance(claim_id)
+
+
+@tool
+def detect_duplicate_claims(
+    employee_id: str,
+    trip_name: str,
+    trip_start_date: str,
+    trip_end_date: str,
+) -> list[ExpenseClaim]:
+    """
+    Detect potential duplicate claims.
+
+    Args:
+        employee_id:
+            Employee identifier.
+        trip_name:
+            Trip name.
+        trip_start_date:
+            Trip start date (YYYY-MM-DD).
+        trip_end_date:
+            Trip end date (YYYY-MM-DD).
+
+    Returns:
+        List of potential duplicate claims.
+    """
+    from datetime import datetime
+    start_date = datetime.fromisoformat(trip_start_date).date()
+    end_date = datetime.fromisoformat(trip_end_date).date()
+    return expense_claim_service.detect_duplicate_claims(employee_id, trip_name, start_date, end_date)
+
+
+@tool
+def calculate_reimbursement(
+    claim_id: str,
+) -> dict:
+    """
+    Calculate reimbursement for a claim.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Reimbursement calculation details.
+    """
+    return expense_claim_service.calculate_reimbursement(claim_id)
+
+
+@tool
+def calculate_variance(
+    claim_id: str,
+) -> dict:
+    """
+    Calculate variance between claimed and approved amounts.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Variance calculation results.
+    """
+    return expense_claim_service.calculate_variance(claim_id)
+
+
+@tool
+def get_claim_status(
+    claim_id: str,
+) -> dict:
+    """
+    Retrieve detailed status information for a claim.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Claim status details.
+    """
+    return expense_claim_service.get_claim_status(claim_id)

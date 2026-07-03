@@ -105,3 +105,103 @@ def get_receipt_status(
     Retrieve receipt details.
     """
     return receipt_service.get_receipt(receipt_id)
+
+
+@tool
+def generate_expense_claim_summary(
+    claim_id: str,
+) -> dict:
+    """
+    Generate expense claim summary document.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Expense claim summary document.
+    """
+    from services.expense_claim_service import ExpenseClaimService
+    claim_service = ExpenseClaimService()
+    claim = claim_service.get_claim(claim_id)
+    return receipt_service.generate_expense_claim_summary(claim)
+
+
+@tool
+def generate_reimbursement_summary(
+    claim_id: str,
+) -> dict:
+    """
+    Generate reimbursement summary document.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Reimbursement summary document.
+    """
+    from services.expense_claim_service import ExpenseClaimService
+    claim_service = ExpenseClaimService()
+    claim = claim_service.get_claim(claim_id)
+    return receipt_service.generate_reimbursement_summary(claim)
+
+
+@tool
+def generate_policy_application_summary(
+    claim_id: str,
+) -> dict:
+    """
+    Generate policy application summary document.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Policy application summary document.
+    """
+    from services.expense_claim_service import ExpenseClaimService
+    claim_service = ExpenseClaimService()
+    claim = claim_service.get_claim(claim_id)
+    return receipt_service.generate_policy_application_summary(claim)
+
+
+@tool
+def generate_expense_breakdown(
+    claim_id: str,
+) -> dict:
+    """
+    Generate detailed expense breakdown document.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Expense breakdown document.
+    """
+    from services.expense_claim_service import ExpenseClaimService
+    claim_service = ExpenseClaimService()
+    claim = claim_service.get_claim(claim_id)
+    return receipt_service.generate_expense_breakdown(claim)
+
+
+@tool
+def generate_variance_report(
+    claim_id: str,
+) -> dict:
+    """
+    Generate variance report document.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Variance report document.
+    """
+    from services.expense_claim_service import ExpenseClaimService
+    claim_service = ExpenseClaimService()
+    claim = claim_service.get_claim(claim_id)
+    return receipt_service.generate_variance_report(claim)

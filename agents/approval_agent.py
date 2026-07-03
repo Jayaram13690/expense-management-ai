@@ -25,6 +25,8 @@ from agents.base_agent import BaseAgent
 from prompts.approval_prompt import APPROVAL_AGENT_SYSTEM_PROMPT
 from tools.approval_tools import (
     approve_claim,
+    get_approval_history,
+    get_approval_status,
     list_manager_queue,
     list_pending_claims,
     reject_claim,
@@ -43,6 +45,9 @@ class ApprovalAgent(BaseAgent):
         - Reject expense claims with valid reasons
         - List all pending claims awaiting approval
         - List claims assigned to specific managers
+        - Retrieve pending approvals
+        - Retrieve approval status
+        - Retrieve approval history
         - Manage approval queues
 
     Tools:
@@ -50,6 +55,8 @@ class ApprovalAgent(BaseAgent):
         - reject_claim: Reject claims with reasons
         - list_pending_claims: Get all claims awaiting approval
         - list_manager_queue: Get claims for specific managers
+        - get_approval_status: Retrieve approval status for a claim
+        - get_approval_history: Retrieve approval history for an employee
 
     Attributes:
         Inherits all attributes from BaseAgent
@@ -69,7 +76,7 @@ class ApprovalAgent(BaseAgent):
         super().__init__(
             model=model,
             system_prompt=APPROVAL_AGENT_SYSTEM_PROMPT,
-            tools=[approve_claim, reject_claim, list_pending_claims, list_manager_queue],
+            tools=[approve_claim, reject_claim, list_pending_claims, list_manager_queue, get_approval_status, get_approval_history],
             name="ApprovalAgent",
             description="Handles approval workflows.",
         )

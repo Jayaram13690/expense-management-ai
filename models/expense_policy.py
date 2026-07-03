@@ -40,6 +40,12 @@ class ExpensePolicy(BaseEntity):
 
     currency: str = "USD"
 
+    reimbursement_percentage: Decimal = Decimal("100.00")
+
+    processing_time_days: int = 7
+
+    special_conditions: str | None = None
+
     effective_from: date
 
     effective_to: date

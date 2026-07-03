@@ -20,7 +20,7 @@ Design Principles:
 
 from agents.base_agent import BaseAgent
 from prompts.employee_prompt import EMPLOYEE_AGENT_SYSTEM_PROMPT
-from tools.employee_tools import get_employee_details, list_employee_claims
+from tools.employee_tools import get_employee_details, list_employee_claims, get_employee_grade, get_employee_department, get_employee_manager
 
 
 class EmployeeAgent(BaseAgent):
@@ -32,11 +32,17 @@ class EmployeeAgent(BaseAgent):
 
     Responsibilities:
         - Retrieve employee details by employee ID
+        - Retrieve employee grade
+        - Retrieve employee department
+        - Retrieve employee manager
         - List expense claims submitted by an employee
         - Provide employee claim history information
 
     Tools:
         - get_employee_details: Retrieve complete employee information
+        - get_employee_grade: Retrieve employee grade
+        - get_employee_department: Retrieve employee department
+        - get_employee_manager: Retrieve employee manager
         - list_employee_claims: Get employee's expense claim history
 
     Attributes:
@@ -57,7 +63,7 @@ class EmployeeAgent(BaseAgent):
         super().__init__(
             model=model,
             system_prompt=EMPLOYEE_AGENT_SYSTEM_PROMPT,
-            tools=[get_employee_details, list_employee_claims],
+            tools=[get_employee_details, get_employee_grade, get_employee_department, get_employee_manager, list_employee_claims],
             name="EmployeeAgent",
             description="Handles employee information retrieval.",
         )

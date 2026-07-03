@@ -35,6 +35,7 @@ No DTO crosses the persistence boundary.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pprint import pprint
 from uuid import uuid4
@@ -125,6 +126,8 @@ class ExpenseClaimService(BaseService):
                 required category or policy is not found.
         """
         self.log_start("Preview Expense Claim")
+        # print(type(request))
+        # print(request)
 
         employee = self._validate_employee(request)
         self._validate_trip_dates(request)
@@ -163,6 +166,8 @@ class ExpenseClaimService(BaseService):
                 required category or policy is not found.
         """
         self.log_start("Submit Expense Claim")
+        # print(type(request))
+        # print(request)
 
         employee = self._validate_employee(request)
         self._validate_trip_dates(request)
@@ -648,6 +653,227 @@ class ExpenseClaimService(BaseService):
 
         claim.submit()
         return claim
+
+    def validate_policy_compliance(
+        self,
+        claim_id: ClaimId,
+    ) -> dict:
+        """
+        Validate policy compliance for an existing claim.
+        """
+        self.log_start("Validate Policy Compliance")
+
+        claim = self._fetch_claim(claim_id)
+        compliance_results = []
+
+        for item in claim.expense_line_items:
+            compliance_result = {
+                "category": item.category_name,
+                "claimed_amount": item.claimed_amount,
+                "approved_amount": item.approved_amount,
+                "compliant": item.status == LineItemStatus.APPROVED,
+                "reason": item.remarks if not item.remarks else "Policy compliant"
+            }
+            compliance_results.append(compliance_result)
+
+        self.log_success("Validate Policy Compliance")
+        return {"claim_id": claim_id, "compliance_results": compliance_results}
+
+    def detect_duplicate_claims(
+        self,
+        employee_id: EmployeeId,
+        trip_name: str,
+        trip_start_date: date,
+        trip_end_date: date,
+    ) -> list[ExpenseClaim]:
+        """
+        Detect potential duplicate claims.
+        """
+        self.log_start("Detect Duplicate Claims")
+
+        # Get all claims for the employee
+        employee_claims = self.list_employee_claims(employee_id)
+
+        # Filter for claims with similar trip details
+        duplicates = []
+        for claim in employee_claims:
+            if (claim.trip_name == trip_name and
+                claim.trip_start_date == trip_start_date and
+                claim.trip_end_date == trip_end_date and
+                claim.status != ClaimStatus.REJECTED):
+                duplicates.append(claim)
+
+        self.log_success("Detect Duplicate Claims")
+        return duplicates
+
+    def calculate_reimbursement(
+        self,
+        claim_id: ClaimId,
+    ) -> dict:
+        """
+        Calculate reimbursement amount for a claim.
+        """
+        self.log_start("Calculate Reimbursement")
+
+        claim = self._fetch_claim(claim_id)
+        
+        total_reimbursement = claim.amount.reimbursable_amount
+        currency = claim.amount.currency
+
+        reimbursement_details = {
+            "claim_id": claim_id,
+            "employee_id": claim.employee_id,
+            "employee_name": claim.employee_name,
+            "total_reimbursement": total_reimbursement,
+            "currency": currency,
+            "reimbursement_date": date.today(),
+            "payment_method": "Bank Transfer",
+            "status": "Pending" if claim.status == ClaimStatus.APPROVED else "Not Approved"
+        }
+
+        self.log_success("Calculate Reimbursement")
+        return reimbursement_details
+
+    def calculate_variance(
+        self,
+        claim_id: ClaimId,
+    ) -> dict:
+        """
+        Calculate variance between claimed and approved amounts.
+        """
+        self.log_start("Calculate Variance")
+
+        claim = self._fetch_claim(claim_id)
+        
+        variance_results = []
+        total_claimed = Decimal("0.00")
+        total_approved = Decimal("0.00")
+
+        for item in claim.expense_line_items:
+            variance = item.claimed_amount - item.approved_amount
+            variance_percent = ((variance / item.claimed_amount) * 100) if item.claimed_amount > 0 else 0
+            
+            variance_result = {
+                "category": item.category_name,
+                "claimed_amount": item.claimed_amount,
+                "approved_amount": item.approved_amount,
+                "variance_amount": variance,
+                "variance_percent": round(variance_percent, 2),
+                "reason": item.remarks if item.remarks else "No variance"
+            }
+            variance_results.append(variance_result)
+            
+            total_claimed += item.claimed_amount
+            total_approved += item.approved_amount
+
+        overall_variance = total_claimed - total_approved
+        overall_variance_percent = ((overall_variance / total_claimed) * 100) if total_claimed > 0 else 0
+
+        variance_summary = {
+            "claim_id": claim_id,
+            "total_claimed": total_claimed,
+            "total_approved": total_approved,
+            "overall_variance_amount": overall_variance,
+            "overall_variance_percent": round(overall_variance_percent, 2),
+            "item_variances": variance_results
+        }
+
+        self.log_success("Calculate Variance")
+        return variance_summary
+
+    def get_claim_status(
+        self,
+        claim_id: ClaimId,
+    ) -> dict:
+        """
+        Retrieve detailed status information for a claim.
+        """
+        self.log_start("Get Claim Status")
+
+        claim = self._fetch_claim(claim_id)
+        
+        status_details = {
+            "claim_id": claim_id,
+            "status": claim.status,
+            "submitted_date": claim.submitted_date,
+            "employee_id": claim.employee_id,
+            "employee_name": claim.employee_name,
+            "total_amount": claim.amount.claimed_amount,
+            "approved_amount": claim.amount.approved_amount,
+            "reimbursable_amount": claim.amount.reimbursable_amount,
+            "currency": claim.amount.currency
+        }
+        
+        if claim.approval:
+            status_details["approval_date"] = claim.approval.approved_date
+            status_details["approver_id"] = claim.approval.approver_id
+            status_details["approver_name"] = claim.approval.approver_name
+            status_details["approval_reason"] = claim.approval.reason
+
+        self.log_success("Get Claim Status")
+        return status_details
+
+    def get_approval_status(
+        self,
+        claim_id: ClaimId,
+    ) -> dict:
+        """
+        Retrieve approval status for a claim.
+        """
+        self.log_start("Get Approval Status")
+
+        claim = self._fetch_claim(claim_id)
+        
+        approval_status = {
+            "claim_id": claim_id,
+            "status": claim.status,
+            "approval_status": "Not Required" if not claim.approval else "Approved" if claim.status == ClaimStatus.APPROVED else "Rejected",
+            "submitted_date": str(claim.submitted_date)
+        }
+        
+        if claim.approval:
+            approval_status["approval_date"] = str(claim.approval.approved_date)
+            approval_status["approver_id"] = claim.approval.approver_id
+            approval_status["approver_name"] = claim.approval.approver_name
+            approval_status["approval_reason"] = claim.approval.reason
+
+        self.log_success("Get Approval Status")
+        return approval_status
+
+    def get_approval_history(
+        self,
+        employee_id: EmployeeId,
+    ) -> list[dict]:
+        """
+        Retrieve approval history for an employee.
+        """
+        self.log_start("Get Approval History")
+
+        # Get all claims for the employee
+        employee_claims = self.list_employee_claims(employee_id)
+        
+        approval_history = []
+        for claim in employee_claims:
+            if claim.status in [ClaimStatus.APPROVED, ClaimStatus.REJECTED]:
+                history_entry = {
+                    "claim_id": claim.claim_id,
+                    "trip_name": claim.trip_name,
+                    "submitted_date": str(claim.submitted_date),
+                    "status": claim.status,
+                    "total_amount": str(claim.amount.claimed_amount),
+                    "approved_amount": str(claim.amount.approved_amount),
+                    "currency": claim.amount.currency
+                }
+                
+                if claim.approval:
+                    history_entry["approval_date"] = str(claim.approval.approved_date)
+                    history_entry["approver_name"] = claim.approval.approver_name
+                    history_entry["approval_reason"] = claim.approval.reason
+                
+                approval_history.append(history_entry)
+
+        self.log_success("Get Approval History")
+        return approval_history
 
     ###########################################################################
     # Preview

@@ -192,3 +192,37 @@ def list_manager_queue(
     Retrieve the approval queue for a manager.
     """
     return expense_claim_service.list_manager_queue(manager_id)
+
+
+@tool
+def get_approval_status(
+    claim_id: str,
+) -> dict:
+    """
+    Retrieve approval status for a claim.
+
+    Args:
+        claim_id:
+            Business claim identifier.
+
+    Returns:
+        Approval status details.
+    """
+    return expense_claim_service.get_approval_status(claim_id)
+
+
+@tool
+def get_approval_history(
+    employee_id: str,
+) -> list[dict]:
+    """
+    Retrieve approval history for an employee.
+
+    Args:
+        employee_id:
+            Employee identifier.
+
+    Returns:
+        List of approval history entries.
+    """
+    return expense_claim_service.get_approval_history(employee_id)

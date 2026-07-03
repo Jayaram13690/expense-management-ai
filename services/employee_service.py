@@ -118,3 +118,33 @@ class EmployeeService(BaseService):
             return None
 
         return self.get_employee(employee.manager_id)
+
+    def get_employee_grade(
+        self,
+        employee_id: EmployeeId,
+    ) -> str:
+        """
+        Retrieve employee grade.
+        """
+        self.log_start("Get Employee Grade")
+
+        employee = self.get_employee(employee_id)
+        grade = employee.grade
+
+        self.log_success("Get Employee Grade")
+        return grade
+
+    def get_employee_department(
+        self,
+        employee_id: EmployeeId,
+    ) -> str:
+        """
+        Retrieve employee department.
+        """
+        self.log_start("Get Employee Department")
+
+        employee = self.get_employee(employee_id)
+        department = employee.department
+
+        self.log_success("Get Employee Department")
+        return department

@@ -22,7 +22,16 @@ Design Principles:
 
 from agents.base_agent import BaseAgent
 from prompts.expense_prompt import EXPENSE_AGENT_SYSTEM_PROMPT
-from tools.expense_tools import get_claim, preview_claim, submit_claim
+from tools.expense_tools import (
+    calculate_reimbursement,
+    calculate_variance,
+    detect_duplicate_claims,
+    get_claim,
+    get_claim_status,
+    preview_claim,
+    submit_claim,
+    validate_policy_compliance,
+)
 
 
 class ExpenseAgent(BaseAgent):
@@ -33,14 +42,26 @@ class ExpenseAgent(BaseAgent):
     tools and system prompt for expense claim management.
 
     Responsibilities:
-        - Preview expense claims
-        - Submit new expense claims
-        - Retrieve existing expense claims
+        - Validate expense claim
+        - Validate policy compliance
+        - Duplicate claim detection
+        - Reimbursement calculation
+        - Variance calculation
+        - Expense preview
+        - Submit expense claim
+        - Persist claim
+        - Retrieve claim
+        - Retrieve claim status
 
     Tools:
         - preview_claim: Calculate reimbursement amounts
         - submit_claim: Persist new claims
         - get_claim: Retrieve claims by identifier
+        - validate_policy_compliance: Validate policy compliance
+        - detect_duplicate_claims: Detect duplicate claims
+        - calculate_reimbursement: Calculate reimbursement amounts
+        - calculate_variance: Calculate variance between amounts
+        - get_claim_status: Retrieve detailed claim status
 
     Attributes:
         Inherits all attributes from BaseAgent
@@ -60,7 +81,16 @@ class ExpenseAgent(BaseAgent):
         super().__init__(
             model=model,
             system_prompt=EXPENSE_AGENT_SYSTEM_PROMPT,
-            tools=[preview_claim, submit_claim, get_claim],
+            tools=[
+                preview_claim,
+                submit_claim,
+                get_claim,
+                validate_policy_compliance,
+                detect_duplicate_claims,
+                calculate_reimbursement,
+                calculate_variance,
+                get_claim_status,
+            ],
             name="ExpenseAgent",
             description="Handles expense claim operations.",
         )

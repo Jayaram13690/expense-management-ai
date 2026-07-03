@@ -120,3 +120,54 @@ def list_employee_claims(
         List of ExpenseClaim aggregates.
     """
     return expense_claim_service.list_employee_claims(employee_id)
+
+
+@tool
+def get_employee_grade(
+    employee_id: str,
+) -> str:
+    """
+    Retrieve employee grade.
+
+    Args:
+        employee_id:
+            Employee identifier.
+
+    Returns:
+        Employee grade.
+    """
+    return employee_service.get_employee_grade(employee_id)
+
+
+@tool
+def get_employee_department(
+    employee_id: str,
+) -> str:
+    """
+    Retrieve employee department.
+
+    Args:
+        employee_id:
+            Employee identifier.
+
+    Returns:
+        Employee department.
+    """
+    return employee_service.get_employee_department(employee_id)
+
+
+@tool
+def get_employee_manager(
+    employee_id: str,
+) -> Employee:
+    """
+    Retrieve employee manager.
+
+    Args:
+        employee_id:
+            Employee identifier.
+
+    Returns:
+        Employee manager.
+    """
+    return employee_service.get_manager(employee_id)
