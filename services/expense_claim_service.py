@@ -829,10 +829,10 @@ class ExpenseClaimService(BaseService):
         }
 
         if claim.approval:
-            status_details["approval_date"] = claim.approval.approved_date
+            status_details["approval_at"] = claim.approval.approved_at
             status_details["approver_id"] = claim.approval.approver_id
             status_details["approver_name"] = claim.approval.approver_name
-            status_details["approval_reason"] = claim.approval.reason
+            # status_details["approval_reason"] = claim.approval.reason
 
         self.log_success("Get Claim Status")
         return status_details
@@ -848,22 +848,40 @@ class ExpenseClaimService(BaseService):
 
         claim = self._fetch_claim(claim_id)
 
+        if not claim.approval:
+            approval_status = "Not Required"
+
+        elif claim.status == ClaimStatus.SUBMITTED:
+            approval_status = "Pending Approval"
+
+        elif claim.status == ClaimStatus.UNDER_REVIEW:
+            approval_status = "Under Review"
+
+        elif claim.status == ClaimStatus.APPROVED:
+            approval_status = "Approved"
+
+        elif claim.status == ClaimStatus.REJECTED:
+            approval_status = "Rejected"
+
+        elif claim.status == ClaimStatus.REIMBURSED:
+            approval_status = "Approved"
+
+        elif claim.status == ClaimStatus.CLOSED:
+            approval_status = "Closed"
+        else:
+            approval_status = "Unknown"
+
         approval_status = {
             "claim_id": claim_id,
             "status": claim.status,
-            "approval_status": (
-                "Not Required"
-                if not claim.approval
-                else "Approved" if claim.status == ClaimStatus.APPROVED else "Rejected"
-            ),
-            "submitted_t": str(claim.submitted_at),
+            "approval_status": approval_status,
+            "submitted_at": str(claim.submitted_at),
         }
 
         if claim.approval:
-            approval_status["approval_date"] = str(claim.approval.approved_date)
+            approval_status["approval_at"] = str(claim.approval.approved_at)
             approval_status["approver_id"] = claim.approval.approver_id
             approval_status["approver_name"] = claim.approval.approver_name
-            approval_status["approval_reason"] = claim.approval.reason
 
         self.log_success("Get Approval Status")
         return approval_status
@@ -894,9 +912,9 @@ class ExpenseClaimService(BaseService):
                 }
 
                 if claim.approval:
-                    history_entry["approval_date"] = str(claim.approval.approved_date)
+                    history_entry["approval_at"] = str(claim.approval.approved_at)
                     history_entry["approver_name"] = claim.approval.approver_name
-                    history_entry["approval_reason"] = claim.approval.reason
+                    # history_entry["approval_reason"] = claim.approval.approval_reason
 
                 approval_history.append(history_entry)
 
