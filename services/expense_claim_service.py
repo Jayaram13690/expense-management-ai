@@ -132,8 +132,21 @@ class ExpenseClaimService(BaseService):
         employee = self._validate_employee(request)
         self._validate_trip_dates(request)
         self._validate_items(request)
+
+        duplicates = self.detect_duplicate_claims(
+            employee_id=request.employee_id,
+            trip_name=request.trip_name,
+            trip_start_date=request.trip_start_date,
+            trip_end_date=request.trip_end_date,
+        )
+        if duplicates:
+            raise ServiceException(
+                message="Expense claim already exists for this employee and trip.",
+                error_code="CLAIM_ALREADY_EXISTS",
+            )
+
         line_items = self._calculate_line_items(employee, request)
-        preview = self._build_preview(employee, line_items)
+        preview = self._build_preview(employee, line_items, request)
 
         self.log_success("Preview Expense Claim")
         return preview
@@ -172,6 +185,19 @@ class ExpenseClaimService(BaseService):
         employee = self._validate_employee(request)
         self._validate_trip_dates(request)
         self._validate_items(request)
+
+        duplicates = self.detect_duplicate_claims(
+            employee_id=request.employee_id,
+            trip_name=request.trip_name,
+            trip_start_date=request.trip_start_date,
+            trip_end_date=request.trip_end_date,
+        )
+        if duplicates:
+            raise ServiceException(
+                message="Expense claim already exists for this employee and trip.",
+                error_code="CLAIM_ALREADY_EXISTS",
+            )
+
         line_items = self._calculate_line_items(employee, request)
         claim = self._build_claim(employee, request, line_items)
         self._persist_claim(claim)
@@ -533,15 +559,7 @@ class ExpenseClaimService(BaseService):
         status = LineItemStatus.APPROVED
         remarks: str | None = None
 
-        if policy.receipt_required and not item.receipt_available:
-            status = LineItemStatus.REJECTED
-            approved_amount = Decimal("0.00")
-            remarks = (
-                f"Receipt is required for '{category.category_name}'. "
-                "Please attach a valid receipt and resubmit."
-            )
-
-        elif approved_amount < item.requested_amount:
+        if approved_amount < item.requested_amount:
             status = LineItemStatus.PARTIALLY_APPROVED
             remarks = (
                 f"Claimed amount exceeds the policy daily limit of "
@@ -801,7 +819,7 @@ class ExpenseClaimService(BaseService):
         status_details = {
             "claim_id": claim_id,
             "status": claim.status,
-            "submitted_date": claim.submitted_date,
+            "submitted_at": claim.submitted_at,
             "employee_id": claim.employee_id,
             "employee_name": claim.employee_name,
             "total_amount": claim.amount.claimed_amount,
@@ -838,7 +856,7 @@ class ExpenseClaimService(BaseService):
                 if not claim.approval
                 else "Approved" if claim.status == ClaimStatus.APPROVED else "Rejected"
             ),
-            "submitted_date": str(claim.submitted_date),
+            "submitted_t": str(claim.submitted_at),
         }
 
         if claim.approval:
@@ -868,7 +886,7 @@ class ExpenseClaimService(BaseService):
                 history_entry = {
                     "claim_id": claim.claim_id,
                     "trip_name": claim.trip_name,
-                    "submitted_date": str(claim.submitted_date),
+                    "submitted_at": str(claim.submitted_at),
                     "status": claim.status,
                     "total_amount": str(claim.amount.claimed_amount),
                     "approved_amount": str(claim.amount.approved_amount),
@@ -893,6 +911,7 @@ class ExpenseClaimService(BaseService):
         self,
         employee: Employee,
         line_items: list[ExpenseLineItem],
+        request: SubmitExpenseClaimRequest,
     ) -> ClaimPreview:
         """
         Build a ClaimPreview DTO from calculated ExpenseLineItem value objects.
@@ -910,6 +929,9 @@ class ExpenseClaimService(BaseService):
 
             line_items:
                 Calculated ExpenseLineItem value objects.
+
+            request:
+                The original submission request.
 
         Returns:
             ClaimPreview DTO for the caller.
@@ -939,7 +961,7 @@ class ExpenseClaimService(BaseService):
             for item in line_items
         ]
 
-        warnings = self._collect_warnings(line_items)
+        warnings = self._collect_warnings(line_items, request)
 
         return ClaimPreview(
             employee_id=str(employee.employee_id),
@@ -955,6 +977,7 @@ class ExpenseClaimService(BaseService):
     def _collect_warnings(
         self,
         line_items: list[ExpenseLineItem],
+        request: SubmitExpenseClaimRequest,
     ) -> list[str]:
         """
         Collect human-readable warnings from calculated line items.
@@ -965,21 +988,30 @@ class ExpenseClaimService(BaseService):
         Args:
             line_items:
                 Calculated expense line items.
+            request:
+                The original submission request.
 
         Returns:
             Ordered list of warning strings.
         """
         warnings: list[str] = []
 
-        for item in line_items:
-            if item.remarks:
-                warnings.append(f"{item.category_name}: {item.remarks}")
-
-            if item.receipt_required and item.status != LineItemStatus.REJECTED:
-                warnings.append(f"{item.category_name}: Receipt verification required.")
+        for item, req_item in zip(line_items, request.expense_items, strict=True):
+            if item.receipt_required and not req_item.receipt_available:
+                warnings.append(
+                    f"{item.category_name}: Receipt upload is pending and can be attached later."
+                )
 
             if item.approval_required:
                 warnings.append(f"{item.category_name}: Manager approval required.")
+
+            if item.approved_amount < item.claimed_amount:
+                if item.remarks:
+                    warnings.append(f"{item.category_name}: {item.remarks}")
+                else:
+                    warnings.append(
+                        f"{item.category_name}: Claimed amount exceeds policy daily limit."
+                    )
 
         return warnings
 

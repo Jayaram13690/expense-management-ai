@@ -9,6 +9,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from common.identifiers import ClaimId, ReceiptId
+from config.enums import ClaimStatus
 from exceptions.repository import RepositoryException
 from models.expense_claim import ExpenseClaim
 from models.expense_line_item import LineItemStatus
@@ -150,7 +151,7 @@ class ReceiptService(BaseService):
             "destination": claim.destination,
             "trip_start_date": str(claim.trip_start_date),
             "trip_end_date": str(claim.trip_end_date),
-            "submitted_date": str(claim.submitted_date),
+            "submitted_at": str(claim.submitted_at),
             "status": claim.status,
             "total_claimed": str(claim.amount.claimed_amount),
             "total_approved": str(claim.amount.approved_amount),

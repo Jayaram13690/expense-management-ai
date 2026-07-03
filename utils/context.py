@@ -111,7 +111,10 @@ def get_current_workflow_context() -> WorkflowContextData:
         >>> context = get_current_workflow_context()
         >>> print(f"Current workflow: {context.workflow_id}")
     """
-    return _workflow_context_var.get()
+    ctx = _workflow_context_var.get()
+    if ctx is None:
+        return WorkflowContextData()
+    return ctx
 
 
 def get_workflow_id() -> str | None:

@@ -1,12 +1,16 @@
+import sys
+
 from agents.receipt_agent import ReceiptAgent
+
+sys.path.insert(0, ".")
 
 agent = ReceiptAgent()
 
 queries = [
-    "Generate Expense Claim Summary for claim CLMxxxx",
-    "Generate Reimbursement Summary for claim CLMxxxx",
-    "Generate Expense Breakdown for claim CLMxxxx",
-    "Generate Variance Report for claim CLMxxxx",
+    "Generate Expense Claim Summary for claim CLM114558386555",
+    "Generate Reimbursement Summary for claim CLM114558386555",
+    "Generate Expense Breakdown for claim CLM114558386555",
+    "Generate Variance Report for claim CLM114558386555",
 ]
 
 for q in queries:
@@ -15,5 +19,3 @@ for q in queries:
     print(q)
 
     result = agent.invoke(q)
-
-    print(result)
