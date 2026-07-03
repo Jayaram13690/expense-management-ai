@@ -111,6 +111,7 @@ def _normalize_request(request):
         return SubmitExpenseClaimRequest.model_validate(request)
     return request
 
+
 @tool
 def preview_claim(
     request: SubmitExpenseClaimRequest | dict,
@@ -126,7 +127,7 @@ def preview_claim(
         ClaimPreview containing calculated reimbursement details.
     """
     request = _normalize_request(request)
-        
+
     return expense_claim_service.preview_claim(request)
 
 
@@ -145,7 +146,7 @@ def submit_claim(
         Persisted ExpenseClaim.
     """
     request = _normalize_request(request)
-        
+
     return expense_claim_service.submit_claim(request)
 
 
@@ -207,9 +208,12 @@ def detect_duplicate_claims(
         List of potential duplicate claims.
     """
     from datetime import datetime
+
     start_date = datetime.fromisoformat(trip_start_date).date()
     end_date = datetime.fromisoformat(trip_end_date).date()
-    return expense_claim_service.detect_duplicate_claims(employee_id, trip_name, start_date, end_date)
+    return expense_claim_service.detect_duplicate_claims(
+        employee_id, trip_name, start_date, end_date
+    )
 
 
 @tool

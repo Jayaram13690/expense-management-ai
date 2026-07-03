@@ -1,4 +1,5 @@
 import sys
+
 sys.path.insert(0, ".")
 
 from agents.expense_agent import ExpenseAgent
@@ -28,7 +29,6 @@ Expense Items:
    Date: 2026-06-21
    Category: TAXI
 """,
-
     """
 Submit an expense claim.
 
@@ -50,7 +50,7 @@ Expense Items:
    Amount: 900
    Date: 2026-06-21
    Category: TAXI
-"""
+""",
 ]
 
 for query in queries:

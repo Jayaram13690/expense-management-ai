@@ -6,8 +6,8 @@ Contains business operations related to receipts.
 
 from __future__ import annotations
 
-from datetime import date
 from decimal import Decimal
+
 from common.identifiers import ClaimId, ReceiptId
 from exceptions.repository import RepositoryException
 from models.expense_claim import ExpenseClaim
@@ -163,10 +163,10 @@ class ReceiptService(BaseService):
                     "claimed_amount": str(item.claimed_amount),
                     "approved_amount": str(item.approved_amount),
                     "status": item.status,
-                    "remarks": item.remarks
+                    "remarks": item.remarks,
                 }
                 for item in claim.expense_line_items
-            ]
+            ],
         }
 
         self.log_success("Generate Expense Claim Summary")
@@ -196,11 +196,11 @@ class ReceiptService(BaseService):
                 {
                     "category": item.category_name,
                     "reimbursement_amount": str(item.approved_amount),
-                    "reason": item.remarks
+                    "reason": item.remarks,
                 }
                 for item in claim.expense_line_items
                 if item.approved_amount > 0
-            ]
+            ],
         }
 
         self.log_success("Generate Reimbursement Summary")
@@ -224,8 +224,8 @@ class ReceiptService(BaseService):
             "policy_compliance": {
                 "compliant_items": 0,
                 "non_compliant_items": 0,
-                "compliance_details": []
-            }
+                "compliance_details": [],
+            },
         }
 
         for item in claim.expense_line_items:
@@ -234,10 +234,10 @@ class ReceiptService(BaseService):
                 "claimed_amount": str(item.claimed_amount),
                 "approved_amount": str(item.approved_amount),
                 "compliant": item.status == LineItemStatus.APPROVED,
-                "reason": item.remarks if item.remarks else "Policy compliant"
+                "reason": item.remarks if item.remarks else "Policy compliant",
             }
             policy_summary["policy_compliance"]["compliance_details"].append(compliance_detail)
-            
+
             if compliance_detail["compliant"]:
                 policy_summary["policy_compliance"]["compliant_items"] += 1
             else:
@@ -265,15 +265,15 @@ class ReceiptService(BaseService):
                 "business_purpose": claim.business_purpose,
                 "destination": claim.destination,
                 "trip_duration": f"{(claim.trip_end_date - claim.trip_start_date).days + 1} days",
-                "trip_dates": f"{claim.trip_start_date} to {claim.trip_end_date}"
+                "trip_dates": f"{claim.trip_start_date} to {claim.trip_end_date}",
             },
             "expense_categories": {},
             "summary": {
                 "total_claimed": str(claim.amount.claimed_amount),
                 "total_approved": str(claim.amount.approved_amount),
                 "total_reimbursable": str(claim.amount.reimbursable_amount),
-                "currency": claim.amount.currency
-            }
+                "currency": claim.amount.currency,
+            },
         }
 
         # Group expenses by category
@@ -282,18 +282,24 @@ class ReceiptService(BaseService):
                 expense_breakdown["expense_categories"][item.category_name] = {
                     "claimed_total": Decimal("0.00"),
                     "approved_total": Decimal("0.00"),
-                    "items": []
+                    "items": [],
                 }
-            
-            expense_breakdown["expense_categories"][item.category_name]["claimed_total"] += item.claimed_amount
-            expense_breakdown["expense_categories"][item.category_name]["approved_total"] += item.approved_amount
-            expense_breakdown["expense_categories"][item.category_name]["items"].append({
-                "expense_date": str(item.expense_date),
-                "claimed_amount": str(item.claimed_amount),
-                "approved_amount": str(item.approved_amount),
-                "status": item.status,
-                "remarks": item.remarks
-            })
+
+            expense_breakdown["expense_categories"][item.category_name][
+                "claimed_total"
+            ] += item.claimed_amount
+            expense_breakdown["expense_categories"][item.category_name][
+                "approved_total"
+            ] += item.approved_amount
+            expense_breakdown["expense_categories"][item.category_name]["items"].append(
+                {
+                    "expense_date": str(item.expense_date),
+                    "claimed_amount": str(item.claimed_amount),
+                    "approved_amount": str(item.approved_amount),
+                    "status": item.status,
+                    "remarks": item.remarks,
+                }
+            )
 
         # Convert Decimal totals to strings
         for category in expense_breakdown["expense_categories"]:
@@ -317,10 +323,10 @@ class ReceiptService(BaseService):
         self.log_start("Generate Variance Report")
 
         from decimal import Decimal
-        
+
         total_claimed = Decimal("0.00")
         total_approved = Decimal("0.00")
-        
+
         variance_report = {
             "document_type": "VarianceReport",
             "claim_id": claim.claim_id,
@@ -330,35 +336,41 @@ class ReceiptService(BaseService):
                 "total_claimed": "0.00",
                 "total_approved": "0.00",
                 "variance_amount": "0.00",
-                "variance_percentage": "0.00%"
+                "variance_percentage": "0.00%",
             },
-            "item_variances": []
+            "item_variances": [],
         }
 
         for item in claim.expense_line_items:
             total_claimed += item.claimed_amount
             total_approved += item.approved_amount
-            
+
             variance_amount = item.claimed_amount - item.approved_amount
-            variance_percentage = ((variance_amount / item.claimed_amount) * 100) if item.claimed_amount > 0 else 0
-            
-            variance_report["item_variances"].append({
-                "category": item.category_name,
-                "claimed_amount": str(item.claimed_amount),
-                "approved_amount": str(item.approved_amount),
-                "variance_amount": str(variance_amount),
-                "variance_percentage": f"{round(variance_percentage, 2)}%",
-                "reason": item.remarks if item.remarks else "No variance - policy compliant"
-            })
+            variance_percentage = (
+                ((variance_amount / item.claimed_amount) * 100) if item.claimed_amount > 0 else 0
+            )
+
+            variance_report["item_variances"].append(
+                {
+                    "category": item.category_name,
+                    "claimed_amount": str(item.claimed_amount),
+                    "approved_amount": str(item.approved_amount),
+                    "variance_amount": str(variance_amount),
+                    "variance_percentage": f"{round(variance_percentage, 2)}%",
+                    "reason": item.remarks if item.remarks else "No variance - policy compliant",
+                }
+            )
 
         overall_variance = total_claimed - total_approved
-        overall_variance_percentage = ((overall_variance / total_claimed) * 100) if total_claimed > 0 else 0
-        
+        overall_variance_percentage = (
+            ((overall_variance / total_claimed) * 100) if total_claimed > 0 else 0
+        )
+
         variance_report["overall_variance"] = {
             "total_claimed": str(total_claimed),
             "total_approved": str(total_approved),
             "variance_amount": str(overall_variance),
-            "variance_percentage": f"{round(overall_variance_percentage, 2)}%"
+            "variance_percentage": f"{round(overall_variance_percentage, 2)}%",
         }
 
         self.log_success("Generate Variance Report")

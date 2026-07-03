@@ -1,6 +1,5 @@
-from coordinator.executor import WorkflowExecutor
+from coordinator.executor import ExecutionMode, WorkflowExecutor
 from coordinator.workflow import GET_EMPLOYEE_DETAILS_WORKFLOW
-from coordinator.executor import ExecutionMode
 
 
 def test_employee_workflow_executes_real_agent():

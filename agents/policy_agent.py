@@ -20,7 +20,13 @@ Design Principles:
 
 from agents.base_agent import BaseAgent
 from prompts.policy_prompt import POLICY_AGENT_SYSTEM_PROMPT
-from tools.policy_tools import get_expense_category, check_employee_eligibility, get_category_limits, get_reimbursement_rules, get_policy_by_identifier
+from tools.policy_tools import (
+    check_employee_eligibility,
+    get_category_limits,
+    get_expense_category,
+    get_policy_by_identifier,
+    get_reimbursement_rules,
+)
 
 
 class PolicyAgent(BaseAgent):
@@ -61,7 +67,13 @@ class PolicyAgent(BaseAgent):
         super().__init__(
             model=model,
             system_prompt=POLICY_AGENT_SYSTEM_PROMPT,
-            tools=[get_policy_by_identifier, get_expense_category, check_employee_eligibility, get_category_limits, get_reimbursement_rules],
+            tools=[
+                get_policy_by_identifier,
+                get_expense_category,
+                check_employee_eligibility,
+                get_category_limits,
+                get_reimbursement_rules,
+            ],
             name="PolicyAgent",
             description="Handles policy lookup.",
         )

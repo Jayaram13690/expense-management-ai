@@ -131,9 +131,7 @@ class ExpenseCategoryService(BaseService):
         #     strategy 1 found nothing.
         if category is None:
             try:
-                category = self.category_repository.get_by_category_code(
-                    identifier.upper()
-                )
+                category = self.category_repository.get_by_category_code(identifier.upper())
             except RepositoryException:
                 category = None
 
@@ -158,7 +156,6 @@ class ExpenseCategoryService(BaseService):
         self.log_success("Resolve Expense Category")
 
         return category
-
 
     def category_exists(
         self,

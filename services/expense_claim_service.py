@@ -672,7 +672,7 @@ class ExpenseClaimService(BaseService):
                 "claimed_amount": item.claimed_amount,
                 "approved_amount": item.approved_amount,
                 "compliant": item.status == LineItemStatus.APPROVED,
-                "reason": item.remarks if not item.remarks else "Policy compliant"
+                "reason": item.remarks if not item.remarks else "Policy compliant",
             }
             compliance_results.append(compliance_result)
 
@@ -697,10 +697,12 @@ class ExpenseClaimService(BaseService):
         # Filter for claims with similar trip details
         duplicates = []
         for claim in employee_claims:
-            if (claim.trip_name == trip_name and
-                claim.trip_start_date == trip_start_date and
-                claim.trip_end_date == trip_end_date and
-                claim.status != ClaimStatus.REJECTED):
+            if (
+                claim.trip_name == trip_name
+                and claim.trip_start_date == trip_start_date
+                and claim.trip_end_date == trip_end_date
+                and claim.status != ClaimStatus.REJECTED
+            ):
                 duplicates.append(claim)
 
         self.log_success("Detect Duplicate Claims")
@@ -716,7 +718,7 @@ class ExpenseClaimService(BaseService):
         self.log_start("Calculate Reimbursement")
 
         claim = self._fetch_claim(claim_id)
-        
+
         total_reimbursement = claim.amount.reimbursable_amount
         currency = claim.amount.currency
 
@@ -728,7 +730,7 @@ class ExpenseClaimService(BaseService):
             "currency": currency,
             "reimbursement_date": date.today(),
             "payment_method": "Bank Transfer",
-            "status": "Pending" if claim.status == ClaimStatus.APPROVED else "Not Approved"
+            "status": "Pending" if claim.status == ClaimStatus.APPROVED else "Not Approved",
         }
 
         self.log_success("Calculate Reimbursement")
@@ -744,30 +746,34 @@ class ExpenseClaimService(BaseService):
         self.log_start("Calculate Variance")
 
         claim = self._fetch_claim(claim_id)
-        
+
         variance_results = []
         total_claimed = Decimal("0.00")
         total_approved = Decimal("0.00")
 
         for item in claim.expense_line_items:
             variance = item.claimed_amount - item.approved_amount
-            variance_percent = ((variance / item.claimed_amount) * 100) if item.claimed_amount > 0 else 0
-            
+            variance_percent = (
+                ((variance / item.claimed_amount) * 100) if item.claimed_amount > 0 else 0
+            )
+
             variance_result = {
                 "category": item.category_name,
                 "claimed_amount": item.claimed_amount,
                 "approved_amount": item.approved_amount,
                 "variance_amount": variance,
                 "variance_percent": round(variance_percent, 2),
-                "reason": item.remarks if item.remarks else "No variance"
+                "reason": item.remarks if item.remarks else "No variance",
             }
             variance_results.append(variance_result)
-            
+
             total_claimed += item.claimed_amount
             total_approved += item.approved_amount
 
         overall_variance = total_claimed - total_approved
-        overall_variance_percent = ((overall_variance / total_claimed) * 100) if total_claimed > 0 else 0
+        overall_variance_percent = (
+            ((overall_variance / total_claimed) * 100) if total_claimed > 0 else 0
+        )
 
         variance_summary = {
             "claim_id": claim_id,
@@ -775,7 +781,7 @@ class ExpenseClaimService(BaseService):
             "total_approved": total_approved,
             "overall_variance_amount": overall_variance,
             "overall_variance_percent": round(overall_variance_percent, 2),
-            "item_variances": variance_results
+            "item_variances": variance_results,
         }
 
         self.log_success("Calculate Variance")
@@ -791,7 +797,7 @@ class ExpenseClaimService(BaseService):
         self.log_start("Get Claim Status")
 
         claim = self._fetch_claim(claim_id)
-        
+
         status_details = {
             "claim_id": claim_id,
             "status": claim.status,
@@ -801,9 +807,9 @@ class ExpenseClaimService(BaseService):
             "total_amount": claim.amount.claimed_amount,
             "approved_amount": claim.amount.approved_amount,
             "reimbursable_amount": claim.amount.reimbursable_amount,
-            "currency": claim.amount.currency
+            "currency": claim.amount.currency,
         }
-        
+
         if claim.approval:
             status_details["approval_date"] = claim.approval.approved_date
             status_details["approver_id"] = claim.approval.approver_id
@@ -823,14 +829,18 @@ class ExpenseClaimService(BaseService):
         self.log_start("Get Approval Status")
 
         claim = self._fetch_claim(claim_id)
-        
+
         approval_status = {
             "claim_id": claim_id,
             "status": claim.status,
-            "approval_status": "Not Required" if not claim.approval else "Approved" if claim.status == ClaimStatus.APPROVED else "Rejected",
-            "submitted_date": str(claim.submitted_date)
+            "approval_status": (
+                "Not Required"
+                if not claim.approval
+                else "Approved" if claim.status == ClaimStatus.APPROVED else "Rejected"
+            ),
+            "submitted_date": str(claim.submitted_date),
         }
-        
+
         if claim.approval:
             approval_status["approval_date"] = str(claim.approval.approved_date)
             approval_status["approver_id"] = claim.approval.approver_id
@@ -851,7 +861,7 @@ class ExpenseClaimService(BaseService):
 
         # Get all claims for the employee
         employee_claims = self.list_employee_claims(employee_id)
-        
+
         approval_history = []
         for claim in employee_claims:
             if claim.status in [ClaimStatus.APPROVED, ClaimStatus.REJECTED]:
@@ -862,14 +872,14 @@ class ExpenseClaimService(BaseService):
                     "status": claim.status,
                     "total_amount": str(claim.amount.claimed_amount),
                     "approved_amount": str(claim.amount.approved_amount),
-                    "currency": claim.amount.currency
+                    "currency": claim.amount.currency,
                 }
-                
+
                 if claim.approval:
                     history_entry["approval_date"] = str(claim.approval.approved_date)
                     history_entry["approver_name"] = claim.approval.approver_name
                     history_entry["approval_reason"] = claim.approval.reason
-                
+
                 approval_history.append(history_entry)
 
         self.log_success("Get Approval History")

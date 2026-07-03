@@ -1,15 +1,15 @@
 import sys
+
 sys.path.insert(0, ".")
 
 import logging
+
 logging.basicConfig(level=logging.DEBUG)
+
 
 # Let's inspect tools/expense_tools.py directly
 import tools.expense_tools as et
 from models.dto.submit_claim import SubmitExpenseClaimRequest
-from models.dto.expense_item import ExpenseItem
-from datetime import date
-from decimal import Decimal
 
 # Let's construct a sample request dictionary mimicking what the LLM passes
 req_dict = {
@@ -24,23 +24,24 @@ req_dict = {
             "category_code": "HOTEL",
             "description": "Hotel",
             "expense_date": "2026-06-20",
-            "requested_amount": 6000
+            "requested_amount": 6000,
         },
         {
             "category_code": "TRANSPORT",
             "description": "Taxi",
             "expense_date": "2026-06-21",
-            "requested_amount": 900
-        }
-    ]
+            "requested_amount": 900,
+        },
+    ],
 }
 
 # Let's try to validate it with Pydantic
 try:
     req_obj = SubmitExpenseClaimRequest.model_validate(req_dict)
     print("Pydantic validation SUCCESS:", req_obj)
-except Exception as e:
+except Exception:
     import traceback
+
     print("Pydantic validation FAILED:")
     traceback.print_exc()
 
@@ -49,14 +50,16 @@ try:
     print("\nCalling service.preview_claim with object:")
     res = et.expense_claim_service.preview_claim(req_obj)
     print("SUCCESS:", res)
-except Exception as e:
+except Exception:
     import traceback
+
     traceback.print_exc()
 
 try:
     print("\nCalling service.preview_claim with dictionary:")
     res = et.expense_claim_service.preview_claim(req_dict)
     print("SUCCESS:", res)
-except Exception as e:
+except Exception:
     import traceback
+
     traceback.print_exc()

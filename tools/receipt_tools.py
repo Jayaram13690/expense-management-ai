@@ -122,6 +122,7 @@ def generate_expense_claim_summary(
         Expense claim summary document.
     """
     from services.expense_claim_service import ExpenseClaimService
+
     claim_service = ExpenseClaimService()
     claim = claim_service.get_claim(claim_id)
     return receipt_service.generate_expense_claim_summary(claim)
@@ -142,6 +143,7 @@ def generate_reimbursement_summary(
         Reimbursement summary document.
     """
     from services.expense_claim_service import ExpenseClaimService
+
     claim_service = ExpenseClaimService()
     claim = claim_service.get_claim(claim_id)
     return receipt_service.generate_reimbursement_summary(claim)
@@ -162,6 +164,7 @@ def generate_policy_application_summary(
         Policy application summary document.
     """
     from services.expense_claim_service import ExpenseClaimService
+
     claim_service = ExpenseClaimService()
     claim = claim_service.get_claim(claim_id)
     return receipt_service.generate_policy_application_summary(claim)
@@ -182,6 +185,7 @@ def generate_expense_breakdown(
         Expense breakdown document.
     """
     from services.expense_claim_service import ExpenseClaimService
+
     claim_service = ExpenseClaimService()
     claim = claim_service.get_claim(claim_id)
     return receipt_service.generate_expense_breakdown(claim)
@@ -202,6 +206,7 @@ def generate_variance_report(
         Variance report document.
     """
     from services.expense_claim_service import ExpenseClaimService
+
     claim_service = ExpenseClaimService()
     claim = claim_service.get_claim(claim_id)
     return receipt_service.generate_variance_report(claim)

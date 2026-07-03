@@ -76,7 +76,14 @@ class ApprovalAgent(BaseAgent):
         super().__init__(
             model=model,
             system_prompt=APPROVAL_AGENT_SYSTEM_PROMPT,
-            tools=[approve_claim, reject_claim, list_pending_claims, list_manager_queue, get_approval_status, get_approval_history],
+            tools=[
+                approve_claim,
+                reject_claim,
+                list_pending_claims,
+                list_manager_queue,
+                get_approval_status,
+                get_approval_history,
+            ],
             name="ApprovalAgent",
             description="Handles approval workflows.",
         )

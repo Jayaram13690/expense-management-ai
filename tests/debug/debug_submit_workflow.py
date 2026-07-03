@@ -1,17 +1,16 @@
-
 import sys
-sys.path.insert(0, '.')
 
-from agents.employee_agent import EmployeeAgent
-from agents.policy_agent import PolicyAgent
-from agents.expense_agent import ExpenseAgent
-from agents.receipt_agent import ReceiptAgent
+sys.path.insert(0, ".")
+
 from agents.approval_agent import ApprovalAgent
-
+from agents.employee_agent import EmployeeAgent
+from agents.expense_agent import ExpenseAgent
+from agents.policy_agent import PolicyAgent
+from agents.receipt_agent import ReceiptAgent
+from conversation.intents import ConversationIntent
 from coordinator.coordinator import Coordinator
 from coordinator.decision import Decision, DecisionType
 from coordinator.executor import ExecutionMode
-from conversation.intents import ConversationIntent
 
 
 def wrap_agent(agent):
@@ -69,17 +68,20 @@ def main():
     coordinator.collect_field("destination", "Bangalore")
     coordinator.collect_field("trip_start_date", "2026-07-01")
     coordinator.collect_field("trip_end_date", "2026-07-03")
-    coordinator.collect_field("expense_items", [
-        {
-            "category": "HOTEL",
-            "amount": 6500,
-        },
-        {
-            "category": "TAXI",
-            "amount": 800,
-        },
-    ])
-    
+    coordinator.collect_field(
+        "expense_items",
+        [
+            {
+                "category": "HOTEL",
+                "amount": 6500,
+            },
+            {
+                "category": "TAXI",
+                "amount": 800,
+            },
+        ],
+    )
+
     result = coordinator.execute_workflow(decision=decision)
 
     print(result)

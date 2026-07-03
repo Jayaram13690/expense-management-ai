@@ -64,7 +64,7 @@ class ExpensePolicyService(BaseService):
                     f"No reimbursement policy found for category '{category_id}' "
                     f"and employee grade '{employee_grade}'."
                 ),
-                error_code="POLICY_NOT_FOUND"
+                error_code="POLICY_NOT_FOUND",
             )
 
         self.log_success("Get Expense Policy")
@@ -388,4 +388,3 @@ class ExpensePolicyService(BaseService):
             )
 
             raise
-
