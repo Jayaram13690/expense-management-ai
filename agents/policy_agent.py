@@ -18,6 +18,10 @@ Design Principles:
 - Clear separation of concerns
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from agents.base_agent import BaseAgent
 from prompts.policy_prompt import POLICY_AGENT_SYSTEM_PROMPT
 from tools.policy_tools import (
@@ -34,36 +38,10 @@ class PolicyAgent(BaseAgent):
     PolicyAgent for handling policy and category lookup operations.
 
     This agent inherits from BaseAgent and is configured with the specific
-    tools and system prompt for policy information retrieval.
-
-    Responsibilities:
-        - Retrieve expense category details by category code
-        - Retrieve employee eligibility for expense categories
-        - Retrieve expense category limits
-        - Retrieve reimbursement rules
-        - Provide category requirements and configurations
-
-    Tools:
-        - get_expense_category: Retrieve category details by category code
-        - check_employee_eligibility: Check employee eligibility for categories
-        - get_category_limits: Retrieve category spending limits
-        - get_reimbursement_rules: Retrieve reimbursement processing rules
-
-    Attributes:
-        Inherits all attributes from BaseAgent
+    system prompt for policy information retrieval.
     """
 
     def __init__(self, model: str | None = None) -> None:
-        """
-        Initialize the PolicyAgent with specific tools and system prompt.
-
-        Args:
-            model: Optional model specification for the agent.
-                If None, uses the default model from BaseAgent.
-
-        Raises:
-            ValueError: If agent name contains path separators.
-        """
         super().__init__(
             model=model,
             system_prompt=POLICY_AGENT_SYSTEM_PROMPT,
@@ -77,3 +55,22 @@ class PolicyAgent(BaseAgent):
             name="PolicyAgent",
             description="Handles policy lookup.",
         )
+
+    def check_employee_eligibility(self, category_identifier: str, employee_grade: str) -> bool:
+        return bool(
+            check_employee_eligibility(
+                category_identifier=category_identifier,
+                employee_grade=employee_grade,
+            )
+        )
+
+    def get_category_limits(self, category_identifier: str, employee_grade: str) -> dict[str, Any]:
+        limits = get_category_limits(
+            category_identifier=category_identifier,
+            employee_grade=employee_grade,
+        )
+        if hasattr(limits, "model_dump") and callable(limits.model_dump):
+            limits = limits.model_dump()
+        if isinstance(limits, dict):
+            return limits
+        return {"value": limits}

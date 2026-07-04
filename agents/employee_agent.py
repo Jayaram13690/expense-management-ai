@@ -18,7 +18,12 @@ Design Principles:
 - Clear separation of concerns
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from agents.base_agent import BaseAgent
+from contracts import EmployeeProfile
 from prompts.employee_prompt import EMPLOYEE_AGENT_SYSTEM_PROMPT
 from tools.employee_tools import (
     get_employee_department,
@@ -79,3 +84,29 @@ class EmployeeAgent(BaseAgent):
             name="EmployeeAgent",
             description="Handles employee information retrieval.",
         )
+
+    def get_employee_profile(self, employee_id: str) -> EmployeeProfile:
+        """Return a deterministic orchestration profile for an employee."""
+
+        employee = get_employee_details(employee_id)
+        claims = list_employee_claims(employee_id)
+
+        return EmployeeProfile(
+            employee_id=str(employee.employee_id),
+            employee_name=employee.full_name,
+            employee_grade=str(employee.grade),
+            department=str(employee.department),
+            manager_id=str(employee.manager_id) if employee.manager_id is not None else None,
+            history=[self._plain_value(claim) for claim in claims],
+        )
+
+    def _plain_value(self, value: Any) -> Any:
+        if hasattr(value, "model_dump") and callable(value.model_dump):
+            return value.model_dump()
+        if isinstance(value, dict):
+            return {key: self._plain_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._plain_value(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._plain_value(item) for item in value]
+        return value

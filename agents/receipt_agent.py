@@ -23,6 +23,9 @@ Design Principles:
 - Clear separation of concerns
 """
 
+from collections.abc import Mapping
+from typing import Any
+
 from agents.base_agent import BaseAgent
 from prompts.receipt_prompt import RECEIPT_AGENT_SYSTEM_PROMPT
 from tools.receipt_tools import (
@@ -91,3 +94,13 @@ class ReceiptAgent(BaseAgent):
             name="ReceiptAgent",
             description="Handles business document generation.",
         )
+
+    def generate_receipt_result(self, claim_id: str) -> dict[str, Any]:
+        """Generate the final acknowledgement payload for orchestration."""
+
+        result = generate_reimbursement_summary(claim_id)
+        if hasattr(result, "model_dump") and callable(result.model_dump):
+            return result.model_dump()
+        if isinstance(result, Mapping):
+            return dict(result)
+        return {"value": result}

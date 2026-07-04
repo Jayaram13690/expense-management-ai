@@ -21,6 +21,9 @@ Design Principles:
 - Clear separation of concerns
 """
 
+from collections.abc import Mapping
+from typing import Any
+
 from agents.base_agent import BaseAgent
 from prompts.approval_prompt import APPROVAL_AGENT_SYSTEM_PROMPT
 from tools.approval_tools import (
@@ -87,3 +90,13 @@ class ApprovalAgent(BaseAgent):
             name="ApprovalAgent",
             description="Handles approval workflows.",
         )
+
+    def get_approval_result(self, claim_id: str) -> dict[str, Any]:
+        """Retrieve approval status for orchestration."""
+
+        result = get_approval_status(claim_id)
+        if hasattr(result, "model_dump") and callable(result.model_dump):
+            return result.model_dump()
+        if isinstance(result, Mapping):
+            return dict(result)
+        return {"value": result}

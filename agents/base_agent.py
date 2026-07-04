@@ -21,6 +21,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
+from pydantic import BaseModel
 from strands import Agent as StrandsAgent
 from strands.models import BedrockModel
 
@@ -111,7 +112,13 @@ class BaseAgent:
         """Return the configured agent description."""
         return self._agent.description
 
-    def invoke(self, prompt: str, **kwargs: Any) -> Any:
+    def invoke(
+        self,
+        prompt: str,
+        *,
+        structured_output_model: type[BaseModel] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         """
         Invoke the Strands agent synchronously.
         """
@@ -126,8 +133,9 @@ class BaseAgent:
             asyncio.set_event_loop(loop)
 
         result = loop.run_until_complete(
-            self._agent.invoke_async(
+            self.invoke_async(
                 prompt,
+                structured_output_model=structured_output_model,
                 **kwargs,
             )
         )
@@ -135,6 +143,23 @@ class BaseAgent:
         self._logger.debug("Agent invocation completed.")
 
         return result
+
+    async def invoke_async(
+        self,
+        prompt: str,
+        *,
+        structured_output_model: type[BaseModel] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Invoke the Strands agent asynchronously.
+        """
+
+        return await self._agent.invoke_async(
+            prompt,
+            structured_output_model=structured_output_model,
+            **kwargs,
+        )
 
     def stream(self, prompt: str, **kwargs: Any) -> AsyncIterator[Any]:
         """

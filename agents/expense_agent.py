@@ -20,14 +20,22 @@ Design Principles:
 - Clear separation of concerns
 """
 
+from collections.abc import Mapping
+from typing import Any
+
 from agents.base_agent import BaseAgent
+from models.dto.claim_preview import ClaimPreview
+from models.dto.submit_claim import SubmitExpenseClaimRequest
+from models.expense_claim import ExpenseClaim
 from prompts.expense_prompt import EXPENSE_AGENT_SYSTEM_PROMPT
 from tools.expense_tools import (
     calculate_reimbursement,
     calculate_variance,
     detect_duplicate_claims,
     get_claim,
-    get_claim_status,
+)
+from tools.expense_tools import get_claim_status as get_claim_status_tool
+from tools.expense_tools import (
     preview_claim,
     submit_claim,
     validate_policy_compliance,
@@ -89,8 +97,49 @@ class ExpenseAgent(BaseAgent):
                 detect_duplicate_claims,
                 calculate_reimbursement,
                 calculate_variance,
-                get_claim_status,
+                get_claim_status_tool,
             ],
             name="ExpenseAgent",
             description="Handles expense claim operations.",
         )
+
+    def preview_claim_request(
+        self,
+        request: SubmitExpenseClaimRequest | dict[str, Any],
+        *,
+        employee_profile: Any | None = None,
+        policy_context: Any | None = None,
+    ) -> ClaimPreview:
+        """Generate a claim preview directly from the expense tools."""
+
+        normalized = self._normalize_request(request)
+        return preview_claim(normalized)
+
+    def submit_claim_request(
+        self,
+        request: SubmitExpenseClaimRequest | dict[str, Any],
+        *,
+        employee_profile: Any | None = None,
+        policy_context: Any | None = None,
+    ) -> ExpenseClaim:
+        """Submit a claim directly from the expense tools."""
+
+        normalized = self._normalize_request(request)
+        return submit_claim(normalized)
+
+    def get_claim_status(self, claim_id: str) -> dict[str, Any]:
+        """Return claim status through the underlying tool."""
+
+        result = get_claim_status_tool(claim_id)
+        if hasattr(result, "model_dump") and callable(result.model_dump):
+            return result.model_dump()
+        if isinstance(result, Mapping):
+            return dict(result)
+        return {"value": result}
+
+    def _normalize_request(
+        self, request: SubmitExpenseClaimRequest | dict[str, Any]
+    ) -> SubmitExpenseClaimRequest:
+        if isinstance(request, SubmitExpenseClaimRequest):
+            return request
+        return SubmitExpenseClaimRequest.model_validate(request)

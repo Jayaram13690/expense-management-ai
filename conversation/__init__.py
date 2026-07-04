@@ -1,30 +1,22 @@
 """
 Conversation Layer Package.
 
-This package provides metadata for conversational interfaces in the Enterprise AI
-Travel Expense Management System. It defines supported business intents, information
-requirements, and reusable conversational prompts.
-
-Design Principles:
--------------------
-- Metadata only — no execution, routing, or business logic
-- Lightweight and focused on conversational metadata
-- Designed for consumption by future Coordinator Agents
-- Clear separation from business layer, service layer, and tool layer
-- No dependencies on services, repositories, tools, or agents
-
-Package Contents:
------------------
-- intents: Business intents supported by the conversational interface
-- requirements: Information requirements for each intent
-- prompts: Reusable conversational questions for gathering information
+This package provides conversational metadata and orchestration components for
+expense claim conversations.
 """
 
-# Import core components
+from conversation.conversation_context import ConversationContext
+from conversation.conversation_state import ConversationState
+from conversation.execution_patterns import (
+    HumanInTheLoopExecution,
+    ParallelExecution,
+    SequentialExecution,
+)
+from conversation.execution_plan import ExecutionPattern, ExecutionPlan
+from conversation.execution_planner import ExecutionPlanner
 from conversation.intents import ConversationIntent
-
-# Import commonly used prompts for convenience
-from conversation.prompts import (  # Core conversational prompts; Additional useful prompts
+from conversation.orchestrator import ConversationOrchestrator
+from conversation.prompts import (
     APPROVAL_REASON,
     APPROVER_ID,
     APPROVER_NAME,
@@ -66,10 +58,17 @@ from conversation.requirements import (
 )
 
 __all__ = [
-    # Core components
+    "ConversationContext",
+    "ConversationState",
+    "ConversationOrchestrator",
+    "ExecutionPattern",
+    "ExecutionPlan",
+    "ExecutionPlanner",
+    "SequentialExecution",
+    "ParallelExecution",
+    "HumanInTheLoopExecution",
     "ConversationIntent",
     "IntentRequirements",
-    # Intent requirements constants
     "SUBMIT_EXPENSE_CLAIM_REQUIREMENTS",
     "PREVIEW_EXPENSE_CLAIM_REQUIREMENTS",
     "GET_EXPENSE_CLAIM_REQUIREMENTS",
@@ -84,7 +83,6 @@ __all__ = [
     "GET_POLICY_REQUIREMENTS",
     "GET_EXPENSE_CATEGORY_REQUIREMENTS",
     "UNKNOWN_REQUIREMENTS",
-    # Commonly used conversational prompts
     "TRIP_NAME",
     "BUSINESS_PURPOSE",
     "DESTINATION",
