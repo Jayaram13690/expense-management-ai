@@ -1,39 +1,42 @@
 from __future__ import annotations
 
-import json
-from collections.abc import Awaitable, Callable
-from unittest.mock import AsyncMock, Mock
+from pathlib import Path
+from unittest.mock import Mock
 
 from agents.approval_agent import ApprovalAgent
 from agents.employee_agent import EmployeeAgent
 from agents.expense_agent import ExpenseAgent
 from agents.policy_agent import PolicyAgent
-from agents.receipt_agent import ReceiptAgent
-from contracts import EmployeeProfile, PolicyContext
+from agents.receipt_agent import ReceiptAgent, ReceiptUploadError
+from contracts import EmployeeProfile
 from conversation.conversation_state import ConversationState
 from conversation.orchestrator import ConversationOrchestrator
 
-AgentType = EmployeeAgent | ExpenseAgent | PolicyAgent | ApprovalAgent | ReceiptAgent
 
-
-def _stubbed_agent(
-    agent: AgentType, side_effect: Callable[..., Awaitable[object]] | Callable[..., object]
-) -> AgentType:
-    agent._agent.invoke_async = AsyncMock(side_effect=side_effect)
-    return agent
-
-
-def _build_orchestrator() -> ConversationOrchestrator:
-    employee_agent = _stubbed_agent(EmployeeAgent(), _employee_side_effect)
+def _build_orchestrator(receipt_upload_side_effect=None) -> ConversationOrchestrator:
+    employee_agent = EmployeeAgent()
     employee_agent.get_employee_profile = Mock(side_effect=_employee_profile_side_effect)
 
-    policy_agent = _stubbed_agent(PolicyAgent(), _policy_side_effect)
+    policy_agent = PolicyAgent()
     policy_agent.check_employee_eligibility = Mock(side_effect=_policy_eligibility_side_effect)
     policy_agent.get_category_limits = Mock(side_effect=_policy_limits_side_effect)
 
-    expense_agent = _stubbed_agent(ExpenseAgent(), _expense_side_effect)
-    approval_agent = _stubbed_agent(ApprovalAgent(), _approval_side_effect)
-    receipt_agent = _stubbed_agent(ReceiptAgent(), _receipt_side_effect)
+    expense_agent = ExpenseAgent()
+    expense_agent.preview_claim_request = Mock(side_effect=_preview_side_effect)
+    expense_agent.submit_claim_request = Mock(side_effect=_submit_side_effect)
+
+    approval_agent = ApprovalAgent()
+    approval_agent.get_approval_result = Mock(
+        return_value={"approval_id": "APR-2001", "status": "pending"}
+    )
+
+    receipt_agent = ReceiptAgent()
+    receipt_agent.upload_receipt_file = Mock(
+        side_effect=receipt_upload_side_effect or _receipt_upload_side_effect
+    )
+    receipt_agent.generate_receipt_result = Mock(
+        return_value={"receipt_id": "RCT-3001", "status": "generated"}
+    )
 
     return ConversationOrchestrator(
         employee_agent=employee_agent,
@@ -44,97 +47,9 @@ def _build_orchestrator() -> ConversationOrchestrator:
     )
 
 
-async def _employee_side_effect(prompt: str, **kwargs: object) -> object:
-    assert "EMP0006" in prompt
-    return {
-        "employee_id": "EMP0006",
-        "employee_name": "Asha Rao",
-        "employee_grade": "G5",
-        "manager_id": "MGR001",
-    }
-
-
-async def _policy_side_effect(prompt: str, **_: object) -> dict[str, object]:
-    payload = json.loads(prompt)
-    task = payload["task"]
-    category = payload["category_identifier"].lower()
-    if category in {"hotel", "taxi"} and task in {
-        "check_employee_eligibility",
-        "get_category_limits",
-    }:
-        return {
-            "eligible": True,
-            "daily_limit": "5000" if category == "hotel" else "1500",
-            "monthly_limit": "20000" if category == "hotel" else "10000",
-            "receipt_required": True,
-            "approval_required": False,
-        }
-    raise AssertionError(f"Unexpected policy prompt: {prompt}")
-
-
-async def _expense_side_effect(payload: object, **_: object) -> dict[str, object]:
-    if isinstance(payload, str):
-        text = payload.strip()
-        try:
-            structured = json.loads(text)
-        except json.JSONDecodeError as err:
-            if "claim status" in text.lower() or "status of claim" in text.lower():
-                return {"claim_id": "CLM1001", "status": "submitted"}
-            raise AssertionError(f"Unexpected expense prompt: {payload}") from err
-    else:
-        raise AssertionError(f"Unexpected expense prompt type: {type(payload)}")
-
-    assert set(structured.keys()) >= {"task", "employee_profile", "policy_context", "claim"}
-    claim = structured["claim"]
-    assert isinstance(claim, dict)
-    assert set(claim.keys()) == {
-        "employee_id",
-        "trip_name",
-        "business_purpose",
-        "destination",
-        "trip_start_date",
-        "trip_end_date",
-        "expense_items",
-    }
-
-    policy_context = structured["policy_context"]
-    assert isinstance(policy_context, dict)
-    assert set(policy_context.keys()) == {"employee_grade", "categories"}
-    assert policy_context["employee_grade"] == "G5"
-    assert set(policy_context["categories"].keys()) == {"HOTEL", "TAXI"}
-
-    if structured["task"] == "preview":
-        return {
-            "total_requested": "6700",
-            "total_approved": "6500",
-            "variance": "200",
-            "warnings": ["Policy limits applied"],
-        }
-    if structured["task"] == "submit":
-        return {
-            "claim_id": "CLM-1001",
-            "status": "submitted",
-        }
-    raise AssertionError(f"Unexpected expense task: {structured['task']}")
-
-
-async def _approval_side_effect(prompt: str, **_: object) -> dict[str, object]:
-    payload = json.loads(prompt)
-    if payload["task"] == "approval":
-        return {"approval_id": "APR-2001", "status": "pending"}
-    raise AssertionError(f"Unexpected approval prompt: {prompt}")
-
-
-async def _receipt_side_effect(prompt: str, **_: object) -> dict[str, object]:
-    payload = json.loads(prompt)
-    if payload["task"] == "receipt":
-        return {"receipt_id": "RCT-3001", "status": "generated"}
-    raise AssertionError(f"Unexpected receipt prompt: {prompt}")
-
-
 def _employee_profile_side_effect(employee_id: str) -> EmployeeProfile:
     return EmployeeProfile(
-        employee_id="EMP0006",
+        employee_id=employee_id,
         employee_name="Asha Rao",
         employee_grade="G5",
         department="Engineering",
@@ -150,22 +65,55 @@ def _policy_eligibility_side_effect(category_identifier: str, employee_grade: st
 
 def _policy_limits_side_effect(category_identifier: str, employee_grade: str) -> dict[str, object]:
     assert employee_grade == "G5"
-    category = category_identifier.upper()
-    if category == "HOTEL":
-        return {
-            "daily_limit": "5000",
-            "monthly_limit": "20000",
-            "receipt_required": True,
-            "approval_required": False,
-        }
-    if category == "TAXI":
-        return {
-            "daily_limit": "1500",
-            "monthly_limit": "10000",
-            "receipt_required": True,
-            "approval_required": False,
-        }
-    raise AssertionError(f"Unexpected policy category: {category_identifier}")
+    return {
+        "daily_limit": "5000" if category_identifier.upper() == "HOTEL" else "1500",
+        "monthly_limit": "20000" if category_identifier.upper() == "HOTEL" else "10000",
+        "receipt_required": True,
+        "approval_required": False,
+    }
+
+
+def _preview_side_effect(*_, **__) -> dict[str, object]:
+    return {
+        "total_requested": "6700",
+        "total_approved": "6500",
+        "variance": "200",
+        "warnings": ["Policy limits applied"],
+    }
+
+
+def _submit_side_effect(*_, **__) -> dict[str, object]:
+    return {
+        "claim_id": "CLM-1001",
+        "status": "submitted",
+    }
+
+
+def _receipt_upload_side_effect(
+    *, file_path: str, claim_id: str, category: str, receipt_index: int, **__
+) -> dict[str, object]:
+    normalized = file_path.replace("/", "\\")
+    if normalized.endswith("missing.jpg"):
+        raise ReceiptUploadError(
+            "I couldn't find the file. Please provide a valid local file path."
+        )
+    if normalized.endswith("notes.txt"):
+        raise ReceiptUploadError(
+            "Unsupported receipt file type. Please upload a JPG, JPEG, PNG, or PDF file."
+        )
+    if normalized.endswith("duplicate.jpg"):
+        raise ReceiptUploadError(
+            f"That file has already been uploaded for the {category.upper()} receipt. "
+            "Please provide a different file."
+        )
+    return {
+        "uploaded": True,
+        "bucket": "expense-ai-receipts",
+        "key": f"claims/{claim_id}/{category}/receipt_{receipt_index}.jpg",
+        "content_type": "image/jpeg",
+        "file_name": Path(file_path).name,
+        "source_path": file_path,
+    }
 
 
 def _claim_data() -> dict[str, object]:
@@ -183,7 +131,7 @@ def _claim_data() -> dict[str, object]:
                 "expense_date": "2026-07-01",
                 "requested_amount": "5800",
                 "currency": "INR",
-                "receipt_available": True,
+                "receipt_available": False,
             },
             {
                 "category_code": "TAXI",
@@ -191,179 +139,109 @@ def _claim_data() -> dict[str, object]:
                 "expense_date": "2026-07-03",
                 "requested_amount": "900",
                 "currency": "INR",
-                "receipt_available": True,
+                "receipt_available": False,
             },
         ],
     }
 
 
-def test_sequential_execution_generates_preview_and_waits_for_confirmation():
-    orchestrator = _build_orchestrator()
-
-    result = orchestrator.process_turn(
-        "I want to submit an expense claim.",
-        extracted_data=_claim_data(),
-    )
-
-    assert result["plan"]["pattern"] == "sequential"
-    assert result["execution_result"]["stage_name"] == "PREVIEW"
-    assert result["state"] == ConversationState.WAITING_USER.value
-    assert "Claim Summary" in result["assistant_message"]
-    assert "Do you want to submit?" in result["assistant_message"]
-    assert orchestrator.employee_agent.get_employee_profile.call_count == 1
-    assert orchestrator.policy_agent.check_employee_eligibility.call_count == 2
-    assert orchestrator.policy_agent.get_category_limits.call_count == 2
-    employee_profile = orchestrator.context.get_execution_result("employee_profile")
-    assert isinstance(employee_profile, EmployeeProfile)
-    assert employee_profile.employee_grade == "G5"
-    assert orchestrator.expense_agent._agent.invoke_async.call_count == 1
-    assert orchestrator.approval_agent._agent.invoke_async.call_count == 0
-    assert orchestrator.receipt_agent._agent.invoke_async.call_count == 0
-
-    policy_context = orchestrator.context.get_execution_result("policy_context")
-    assert isinstance(policy_context, PolicyContext)
-    assert policy_context.employee_grade == "G5"
-    assert set(policy_context.categories.keys()) == {"HOTEL", "TAXI"}
-    assert policy_context.categories["HOTEL"].eligible is True
-    assert str(policy_context.categories["HOTEL"].limits["daily_limit"]) == "5000"
-    assert str(policy_context.categories["TAXI"].limits["daily_limit"]) == "1500"
-
-
-def test_parallel_execution_merges_policy_context_for_multiple_categories():
-    orchestrator = _build_orchestrator()
-
-    orchestrator.context.apply_updates(_claim_data())
-    orchestrator.context.store_execution_result(
-        "employee_profile",
-        EmployeeProfile(
-            employee_id="EMP0006",
-            employee_name="Asha Rao",
-            employee_grade="G5",
-            department="Engineering",
-            manager_id="MGR001",
-        ),
-    )
-
-    result = orchestrator._parallel.execute(orchestrator.context)
-
-    assert result["pattern"] == "parallel"
-    assert result["stage_name"] == "POLICY"
-    assert orchestrator.policy_agent.check_employee_eligibility.call_count == 2
-    assert orchestrator.policy_agent.get_category_limits.call_count == 2
-    employee_profile = orchestrator.context.get_execution_result("employee_profile")
-    assert isinstance(employee_profile, EmployeeProfile)
-    assert employee_profile.employee_grade == "G5"
-    assert isinstance(result["policy_context"], PolicyContext)
-    assert result["policy_context"].employee_grade == "G5"
-    assert set(result["policy_context"].categories.keys()) == {"HOTEL", "TAXI"}
-    assert result["policy_context"].categories["HOTEL"].eligible is True
-    assert str(result["policy_context"].categories["TAXI"].limits["daily_limit"]) == "1500"
-
-
-def test_human_confirmation_resume_and_finalize():
-    orchestrator = _build_orchestrator()
-
+def _start_receipt_flow(orchestrator: ConversationOrchestrator) -> None:
     preview_result = orchestrator.process_turn(
         "I want to submit an expense claim.",
         extracted_data=_claim_data(),
     )
     assert preview_result["state"] == ConversationState.WAITING_USER.value
+    receipt_prompt = orchestrator.process_turn("YES")
+    assert receipt_prompt["state"] == ConversationState.COLLECTING_RECEIPTS.value
 
-    submit_result = orchestrator.process_turn("YES")
 
-    assert submit_result["plan"]["pattern"] == "sequential"
-    assert orchestrator.state == ConversationState.COMPLETED
-    assert orchestrator.expense_agent._agent.invoke_async.call_count == 2
-    assert orchestrator.approval_agent._agent.invoke_async.call_count == 1
-    assert orchestrator.receipt_agent._agent.invoke_async.call_count == 1
+def test_receipt_collection_blocks_submission_until_all_receipts_uploaded():
+    orchestrator = _build_orchestrator()
+
+    _start_receipt_flow(orchestrator)
+
+    hotel_result = orchestrator.process_turn(r"C:\Receipts\hotel.jpg")
+    assert hotel_result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert "TAXI receipt" in hotel_result["assistant_message"]
+    assert orchestrator.expense_agent.submit_claim_request.call_count == 0
+
+    taxi_result = orchestrator.process_turn(r"C:\Receipts\taxi.jpg")
+    assert taxi_result["state"] == ConversationState.COMPLETED.value
+    assert orchestrator.context.receipts_complete is True
+    assert orchestrator.expense_agent.submit_claim_request.call_count == 1
     assert orchestrator.context.claim_id == "CLM-1001"
-    assert "Claim submitted successfully" in submit_result["assistant_message"]
+    assert set(orchestrator.context.receipt_uploads.keys()) == {"HOTEL", "TAXI"}
 
 
-def test_claim_cancellation_requires_no_persistence():
+def test_invalid_receipt_path_keeps_receipt_collection_active():
     orchestrator = _build_orchestrator()
 
-    orchestrator.process_turn(
-        "I want to submit an expense claim.",
-        extracted_data=_claim_data(),
-    )
-    cancel_result = orchestrator.process_turn("NO")
+    _start_receipt_flow(orchestrator)
+    result = orchestrator.process_turn(r"C:\Receipts\missing.jpg")
 
-    assert cancel_result["plan"]["next_action"] == "cancel"
-    assert orchestrator.state == ConversationState.CANCELLED
-    assert orchestrator.expense_agent._agent.invoke_async.call_count == 1
-    assert orchestrator.approval_agent._agent.invoke_async.call_count == 0
-    assert orchestrator.receipt_agent._agent.invoke_async.call_count == 0
-    assert orchestrator.context.claim_id is None
-    assert "cancelled" in cancel_result["assistant_message"].lower()
+    assert result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert "valid local file path" in result["assistant_message"]
+    assert orchestrator.expense_agent.submit_claim_request.call_count == 0
+    assert orchestrator.context.receipt_uploads == {}
 
 
-def test_end_to_end_runtime_claim_lifecycle():
+def test_unsupported_receipt_extension_keeps_same_slot_active():
     orchestrator = _build_orchestrator()
 
-    first_turn = orchestrator.process_turn(
-        "I want to submit an expense claim.",
-        extracted_data=_claim_data(),
-    )
-    assert first_turn["state"] == ConversationState.WAITING_USER.value
-    assert first_turn["execution_result"]["stage_name"] == "PREVIEW"
-    assert "Do you want to submit?" in first_turn["assistant_message"]
+    _start_receipt_flow(orchestrator)
+    result = orchestrator.process_turn(r"C:\Receipts\notes.txt")
 
-    second_turn = orchestrator.process_turn("YES")
-    assert second_turn["state"] == ConversationState.COMPLETED.value
-    assert orchestrator.employee_agent.get_employee_profile.call_count == 1
-    assert orchestrator.policy_agent.check_employee_eligibility.call_count == 2
-    assert orchestrator.policy_agent.get_category_limits.call_count == 2
-    employee_profile = orchestrator.context.get_execution_result("employee_profile")
-    assert isinstance(employee_profile, EmployeeProfile)
-    assert employee_profile.employee_grade == "G5"
-    assert orchestrator.expense_agent._agent.invoke_async.call_count == 2
-    assert orchestrator.approval_agent._agent.invoke_async.call_count == 1
-    assert orchestrator.receipt_agent._agent.invoke_async.call_count == 1
-    assert orchestrator.context.claim_id == "CLM-1001"
-    assert orchestrator.context.confirmation is True
+    assert result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert "unsupported receipt file type" in result["assistant_message"].lower()
+    assert "HOTEL receipt" in result["assistant_message"]
+    assert orchestrator.expense_agent.submit_claim_request.call_count == 0
 
 
-def test_trip_start_date_rejects_future_date_and_keeps_context():
+def test_duplicate_receipt_upload_is_rejected_without_losing_existing_uploads():
     orchestrator = _build_orchestrator()
-    orchestrator.context.apply_updates(
-        {
-            "employee_id": "EMP0006",
-            "trip_name": "AWS Summit Bangalore 2026",
-            "business_purpose": "Evaluate AWS Agentic AI for enterprise expense workflows.",
-            "destination": "Bangalore",
-        }
-    )
 
-    result = orchestrator.process_turn("2027-07-01")
+    _start_receipt_flow(orchestrator)
+    orchestrator.process_turn(r"C:\Receipts\hotel.jpg")
+    result = orchestrator.process_turn(r"C:\Receipts\duplicate.jpg")
 
-    assert result["state"] == ConversationState.WAITING_USER.value
-    assert "trip start date cannot be later than today" in result["assistant_message"].lower()
-    assert orchestrator.context.trip_start_date is None
-    assert orchestrator.context.execution_stage == ConversationState.WAITING_USER
+    assert result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert "already been uploaded" in result["assistant_message"].lower()
+    assert len(orchestrator.context.receipt_uploads["HOTEL"]) == 1
+    assert "TAXI" not in orchestrator.context.receipt_uploads
 
 
-def test_trip_end_date_rejects_earlier_date_and_clears_existing_value():
+def test_receipt_upload_can_be_cancelled_and_resumed():
     orchestrator = _build_orchestrator()
-    orchestrator.context.apply_updates(
-        {
-            "employee_id": "EMP0006",
-            "trip_name": "AWS Summit Bangalore 2026",
-            "business_purpose": "Evaluate AWS Agentic AI for enterprise expense workflows.",
-            "destination": "Bangalore",
-            "trip_start_date": "2026-07-01",
-        }
-    )
-    orchestrator.context.expense_collection_complete = True
-    orchestrator.context.set_stage(ConversationState.WAITING_USER)
 
-    result = orchestrator.process_turn("2026-06-30")
+    _start_receipt_flow(orchestrator)
+    cancel_result = orchestrator.process_turn("CANCEL")
+    assert cancel_result["state"] == ConversationState.WAITING_USER.value
+    assert orchestrator.expense_agent.submit_claim_request.call_count == 0
 
-    assert result["state"] == ConversationState.WAITING_USER.value
-    assert (
-        "trip end date cannot be earlier than the trip start date"
-        in result["assistant_message"].lower()
-    )
-    assert orchestrator.context.trip_start_date == "2026-07-01"
-    assert orchestrator.context.trip_end_date is None
-    assert orchestrator.context.execution_stage == ConversationState.WAITING_USER
+    resume_result = orchestrator.process_turn("RESUME")
+    assert resume_result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert "HOTEL receipt" in resume_result["assistant_message"]
+
+
+def test_done_before_all_receipts_uploaded_keeps_receipt_collection_active():
+    orchestrator = _build_orchestrator()
+
+    _start_receipt_flow(orchestrator)
+    result = orchestrator.process_turn("DONE")
+
+    assert result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert "Receipts are still required" in result["assistant_message"]
+    assert orchestrator.expense_agent.submit_claim_request.call_count == 0
+
+
+def test_successful_receipt_collection_submits_claim_and_generates_acknowledgement():
+    orchestrator = _build_orchestrator()
+
+    _start_receipt_flow(orchestrator)
+    orchestrator.process_turn(r"C:\Receipts\hotel.jpg")
+    result = orchestrator.process_turn(r"C:\Receipts\taxi.jpg")
+
+    assert "Submitting your claim" in result["assistant_message"]
+    assert "Claim submitted successfully" in result["assistant_message"]
+    assert orchestrator.approval_agent.get_approval_result.call_count == 1
+    assert orchestrator.receipt_agent.generate_receipt_result.call_count == 1

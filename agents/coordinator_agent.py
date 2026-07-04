@@ -111,6 +111,7 @@ class CoordinatorAgent(BaseAgent):
         if state in {
             ConversationState.WAITING_USER,
             ConversationState.COLLECTING_EXPENSES,
+            ConversationState.COLLECTING_RECEIPTS,
             ConversationState.EXECUTING,
         }:
             return True
@@ -133,10 +134,7 @@ class CoordinatorAgent(BaseAgent):
             context.claim_id,
             context.execution_results,
         )
-        for value in fields:
-            if value not in (None, "", [], {}):
-                return True
-        return False
+        return any(value not in (None, "", [], {}) for value in fields)
 
     def _build_system_prompt(self) -> str:
         return (

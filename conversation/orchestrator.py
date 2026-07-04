@@ -7,7 +7,7 @@ from agents.approval_agent import ApprovalAgent
 from agents.employee_agent import EmployeeAgent
 from agents.expense_agent import ExpenseAgent
 from agents.policy_agent import PolicyAgent
-from agents.receipt_agent import ReceiptAgent
+from agents.receipt_agent import ReceiptAgent, ReceiptUploadError
 from contracts import EmployeeProfile, PolicyContext
 from conversation.conversation_context import ConversationContext
 from conversation.conversation_state import ConversationState
@@ -43,13 +43,7 @@ class ConversationOrchestrator:
         context: ConversationContext | None = None,
         extraction_source: Callable[[str, ConversationContext], Mapping[str, Any]] | None = None,
     ) -> None:
-        if None in (
-            employee_agent,
-            expense_agent,
-            policy_agent,
-            approval_agent,
-            receipt_agent,
-        ):
+        if None in (employee_agent, expense_agent, policy_agent, approval_agent, receipt_agent):
             raise ValueError("All specialized agents must be provided")
 
         self.employee_agent = employee_agent
@@ -86,12 +80,15 @@ class ConversationOrchestrator:
 
         self.context.record_message("user", message)
 
+        if self.context.execution_stage == ConversationState.COLLECTING_EXPENSES:
+            return self._handle_expense_collection_turn(message, extracted_data)
+
+        if self.context.execution_stage == ConversationState.COLLECTING_RECEIPTS:
+            return self._handle_receipt_collection_turn(message)
+
         confirmation = self._hil.interpret(message)
         if confirmation is not None and self.context.claim_preview is not None:
             self.context.confirmation = confirmation
-
-        if self.context.execution_stage == ConversationState.COLLECTING_EXPENSES:
-            return self._handle_expense_collection_turn(message, extracted_data)
 
         updates, validation_prompt = self._collect_updates_with_validation(message, extracted_data)
         if validation_prompt:
@@ -105,73 +102,10 @@ class ConversationOrchestrator:
         if self.context.missing_fields(self.REQUIRED_FIELDS) and self.context.confirmation is None:
             return self._prompt_for_information()
 
-        execution_result: dict[str, Any] | None = None
-        assistant_message: str | None = None
-        plan = ExecutionPlan(pattern=ExecutionPattern.HUMAN_IN_THE_LOOP, next_action="execute")
+        if self._needs_receipt_collection():
+            return self._route_to_receipt_collection(message)
 
-        while True:
-            plan = self.planner.plan(self.context)
-            self.context.set_stage(ConversationState.EXECUTING)
-
-            if plan.pattern == ExecutionPattern.HUMAN_IN_THE_LOOP:
-                if plan.next_action == "collect_information":
-                    return self._prompt_for_information(plan.prompt)
-                if plan.next_action == "collect_expenses":
-                    return self._start_expense_collection(plan.prompt)
-                if plan.next_action == "await_confirmation":
-                    assistant_message = self._hil.build_prompt(self.context)
-                    self.context.set_stage(ConversationState.WAITING_USER)
-                    break
-                if plan.next_action == "complete":
-                    assistant_message = self._completion_message()
-                    self.context.set_stage(ConversationState.COMPLETED)
-                    break
-                if plan.next_action == "cancel":
-                    return self._cancel_conversation()
-                assistant_message = plan.prompt or "I need a bit more information to continue."
-                self.context.set_stage(ConversationState.WAITING_USER)
-                break
-
-            if plan.pattern == ExecutionPattern.SEQUENTIAL:
-                if plan.next_action == "employee_profile":
-                    execution_result = self._sequential.execute_employee(self.context)
-                elif plan.next_action == "expense_preview":
-                    execution_result = self._sequential.execute_expense_preview(self.context)
-                    assistant_message = self._preview_message(execution_result)
-                    self.context.set_stage(ConversationState.WAITING_USER)
-                    break
-                elif plan.next_action == "expense_submission":
-                    execution_result = self._sequential.execute_expense_submission(self.context)
-                elif plan.next_action == "approval":
-                    execution_result = self._sequential.execute_approval(self.context)
-                elif plan.next_action == "receipt":
-                    execution_result = self._sequential.execute_receipt(self.context)
-                    assistant_message = self._completion_message()
-                    self.context.set_stage(ConversationState.COMPLETED)
-                    break
-                else:
-                    assistant_message = plan.prompt or "I need a bit more information to continue."
-                    self.context.set_stage(ConversationState.WAITING_USER)
-                    break
-                self._record_execution(execution_result)
-                continue
-
-            if plan.pattern == ExecutionPattern.PARALLEL:
-                execution_result = self._parallel.execute(self.context)
-                self._record_execution(execution_result)
-                continue
-
-            assistant_message = plan.prompt or "I need a bit more information to continue."
-            self.context.set_stage(ConversationState.WAITING_USER)
-            break
-
-        assistant_message = assistant_message or self._completion_message()
-        self.context.record_message("assistant", assistant_message)
-        return self._build_response(
-            assistant_message=assistant_message,
-            plan=plan,
-            execution_result=execution_result,
-        )
+        return self._continue_execution()
 
     def resume(self, message: str) -> dict[str, Any]:
         return self.process_turn(message)
@@ -226,12 +160,13 @@ class ConversationOrchestrator:
         return self._validate_trip_date_updates(updates)
 
     def _validate_trip_date_updates(
-        self, updates: Mapping[str, Any]
+        self,
+        updates: Mapping[str, Any],
     ) -> tuple[dict[str, Any], str | None]:
         if not updates:
             return {}, None
 
-        normalized_updates: dict[str, Any] = dict(updates)
+        normalized_updates = dict(updates)
 
         if "trip_start_date" in normalized_updates:
             normalized_value, validation_prompt = self.context.validate_trip_date_value(
@@ -287,14 +222,11 @@ class ConversationOrchestrator:
             prompt = self._expense_collection_prompt()
             self.context.set_stage(ConversationState.COLLECTING_EXPENSES)
             self.context.record_message("assistant", prompt)
-            return self._build_response(
+            return self._build_stage_response(
                 assistant_message=prompt,
-                plan=ExecutionPlan(
-                    pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
-                    next_action="collect_expenses",
-                    prompt=prompt,
-                    metadata={"stage": "COLLECTING_EXPENSES", "missing_fields": ["expense_items"]},
-                ),
+                stage=ConversationState.COLLECTING_EXPENSES,
+                next_action="collect_expenses",
+                metadata={"stage": "COLLECTING_EXPENSES", "missing_fields": ["expense_items"]},
             )
 
         if extracted_data and "expense_items" in extracted_data:
@@ -311,25 +243,164 @@ class ConversationOrchestrator:
         self.context.set_stage(ConversationState.COLLECTING_EXPENSES)
         prompt = self._expense_follow_up_prompt()
         self.context.record_message("assistant", prompt)
-        return self._build_response(
+        return self._build_stage_response(
             assistant_message=prompt,
-            plan=ExecutionPlan(
-                pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
-                next_action="collect_expenses",
-                prompt=prompt,
-                metadata={"stage": "COLLECTING_EXPENSES"},
-            ),
+            stage=ConversationState.COLLECTING_EXPENSES,
+            next_action="collect_expenses",
+            metadata={"stage": "COLLECTING_EXPENSES"},
         )
 
     def _resume_after_expense_collection(
-        self, extracted_data: Mapping[str, Any] | None
+        self,
+        extracted_data: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         updates, validation_prompt = self._collect_updates_with_validation("", extracted_data)
         if validation_prompt:
             return self._prompt_for_information(validation_prompt)
         if updates:
             self.context.apply_updates(updates)
+        return self._continue_execution()
 
+    def _route_to_receipt_collection(self, message: str) -> dict[str, Any]:
+        if self.context.is_receipt_cancel_message(message):
+            return self._pause_receipt_collection()
+        if self.context.is_receipt_resume_message(message):
+            self.context.receipt_upload_paused = False
+            return self._start_receipt_collection()
+        if (
+            self.context.execution_stage == ConversationState.WAITING_USER
+            and not self.context.receipt_upload_paused
+        ):
+            return self._start_receipt_collection()
+        if self._hil.interpret(message) is True:
+            return self._start_receipt_collection()
+
+        self.context.set_stage(ConversationState.COLLECTING_RECEIPTS)
+        return self._handle_receipt_collection_turn(message)
+
+    def _start_receipt_collection(self) -> dict[str, Any]:
+        required_slots = self._required_receipt_slots()
+        if not required_slots:
+            self.context.receipts_complete = True
+            return self._continue_execution()
+
+        self.context.ensure_draft_claim_id()
+        self.context.receipt_upload_paused = False
+        self.context.set_stage(ConversationState.COLLECTING_RECEIPTS)
+        prompt = self._receipt_collection_intro_prompt()
+        self.context.record_message("assistant", prompt)
+        return self._build_stage_response(
+            assistant_message=prompt,
+            stage=ConversationState.COLLECTING_RECEIPTS,
+            next_action="collect_receipts",
+            metadata={
+                "stage": "COLLECTING_RECEIPTS",
+                "required_categories": self.context.required_receipt_categories(),
+            },
+        )
+
+    def _handle_receipt_collection_turn(self, message: str) -> dict[str, Any]:
+        if self.context.is_receipt_cancel_message(message):
+            return self._pause_receipt_collection()
+
+        current_slot = self.context.next_pending_receipt_slot()
+        if current_slot is None:
+            self.context.receipts_complete = True
+            return self._continue_execution()
+
+        if self.context.is_receipt_resume_message(message):
+            prompt = self._receipt_prompt_for_slot(current_slot)
+            self.context.set_stage(ConversationState.COLLECTING_RECEIPTS)
+            self.context.receipt_upload_paused = False
+            self.context.record_message("assistant", prompt)
+            return self._build_stage_response(
+                assistant_message=prompt,
+                stage=ConversationState.COLLECTING_RECEIPTS,
+                next_action="collect_receipts",
+                metadata={"stage": "COLLECTING_RECEIPTS", "current_slot": current_slot},
+            )
+
+        if self.context.is_receipt_collection_done_message(message):
+            remaining_categories = self.context.remaining_receipt_categories()
+            prompt_lines = ["Receipts are still required for the following categories:", ""]
+            prompt_lines.extend(
+                f"{index}. {category}"
+                for index, category in enumerate(remaining_categories, start=1)
+            )
+            prompt_lines.extend(["", self._receipt_prompt_for_slot(current_slot)])
+            prompt = "\n".join(prompt_lines)
+            self.context.set_stage(ConversationState.COLLECTING_RECEIPTS)
+            self.context.record_message("assistant", prompt)
+            return self._build_stage_response(
+                assistant_message=prompt,
+                stage=ConversationState.COLLECTING_RECEIPTS,
+                next_action="collect_receipts",
+                metadata={"stage": "COLLECTING_RECEIPTS", "current_slot": current_slot},
+            )
+
+        try:
+            metadata = self.receipt_agent.upload_receipt_file(
+                file_path=message,
+                claim_id=self.context.ensure_draft_claim_id(),
+                category=str(current_slot["category"]),
+                receipt_index=int(current_slot["receipt_index"]),
+                existing_uploads=self.context.receipt_uploads.get(
+                    str(current_slot["category"]), []
+                ),
+            )
+        except ReceiptUploadError as exc:
+            prompt = f"{exc.user_message}\n\n{self._receipt_prompt_for_slot(current_slot)}"
+            self.context.set_stage(ConversationState.COLLECTING_RECEIPTS)
+            self.context.record_message("assistant", prompt)
+            return self._build_stage_response(
+                assistant_message=prompt,
+                stage=ConversationState.COLLECTING_RECEIPTS,
+                next_action="collect_receipts",
+                metadata={"stage": "COLLECTING_RECEIPTS", "current_slot": current_slot},
+            )
+
+        category = str(current_slot["category"])
+        self.context.append_receipt_upload(category, metadata)
+        next_slot = self.context.next_pending_receipt_slot()
+        if next_slot is None:
+            self.context.receipts_complete = True
+            return self._continue_execution(
+                prefix_message=(
+                    f"{category} receipt uploaded successfully.\n"
+                    "All required receipts have been uploaded.\n"
+                    "Submitting your claim..."
+                )
+            )
+
+        prompt = (
+            f"{category} receipt uploaded successfully.\n\n"
+            f"{self._receipt_prompt_for_slot(next_slot)}"
+        )
+        self.context.set_stage(ConversationState.COLLECTING_RECEIPTS)
+        self.context.record_message("assistant", prompt)
+        return self._build_stage_response(
+            assistant_message=prompt,
+            stage=ConversationState.COLLECTING_RECEIPTS,
+            next_action="collect_receipts",
+            metadata={"stage": "COLLECTING_RECEIPTS", "current_slot": next_slot},
+        )
+
+    def _pause_receipt_collection(self) -> dict[str, Any]:
+        self.context.receipt_upload_paused = True
+        self.context.set_stage(ConversationState.WAITING_USER)
+        prompt = (
+            "Receipt upload has been cancelled for now. Your draft claim is still available.\n\n"
+            "Send RESUME or provide the next receipt file path when you want to continue."
+        )
+        self.context.record_message("assistant", prompt)
+        return self._build_stage_response(
+            assistant_message=prompt,
+            stage=ConversationState.WAITING_USER,
+            next_action="collect_receipts",
+            metadata={"stage": "COLLECTING_RECEIPTS", "paused": True},
+        )
+
+    def _continue_execution(self, prefix_message: str | None = None) -> dict[str, Any]:
         execution_result: dict[str, Any] | None = None
         assistant_message: str | None = None
         plan = ExecutionPlan(pattern=ExecutionPattern.HUMAN_IN_THE_LOOP, next_action="execute")
@@ -337,6 +408,25 @@ class ConversationOrchestrator:
         while True:
             plan = self.planner.plan(self.context)
             self.context.set_stage(ConversationState.EXECUTING)
+
+            if plan.pattern == ExecutionPattern.HUMAN_IN_THE_LOOP:
+                if plan.next_action == "collect_information":
+                    return self._prompt_for_information(plan.prompt)
+                if plan.next_action == "collect_expenses":
+                    return self._start_expense_collection(plan.prompt)
+                if plan.next_action == "await_confirmation":
+                    assistant_message = self._hil.build_prompt(self.context)
+                    self.context.set_stage(ConversationState.WAITING_USER)
+                    break
+                if plan.next_action == "complete":
+                    assistant_message = self._completion_message()
+                    self.context.set_stage(ConversationState.COMPLETED)
+                    break
+                if plan.next_action == "cancel":
+                    return self._cancel_conversation()
+                assistant_message = plan.prompt or "I need a bit more information to continue."
+                self.context.set_stage(ConversationState.WAITING_USER)
+                break
 
             if plan.pattern == ExecutionPattern.SEQUENTIAL:
                 if plan.next_action == "employee_profile":
@@ -359,6 +449,7 @@ class ConversationOrchestrator:
                     assistant_message = plan.prompt or "I need a bit more information to continue."
                     self.context.set_stage(ConversationState.WAITING_USER)
                     break
+
                 self._record_execution(execution_result)
                 continue
 
@@ -367,27 +458,13 @@ class ConversationOrchestrator:
                 self._record_execution(execution_result)
                 continue
 
-            if plan.pattern == ExecutionPattern.HUMAN_IN_THE_LOOP:
-                if plan.next_action == "await_confirmation":
-                    assistant_message = self._hil.build_prompt(self.context)
-                    self.context.set_stage(ConversationState.WAITING_USER)
-                    break
-                if plan.next_action == "complete":
-                    assistant_message = self._completion_message()
-                    self.context.set_stage(ConversationState.COMPLETED)
-                    break
-                if plan.next_action == "collect_expenses":
-                    assistant_message = self._expense_collection_prompt()
-                    self.context.set_stage(ConversationState.COLLECTING_EXPENSES)
-                    break
-                if plan.next_action == "cancel":
-                    return self._cancel_conversation()
-
             assistant_message = plan.prompt or "I need a bit more information to continue."
             self.context.set_stage(ConversationState.WAITING_USER)
             break
 
         assistant_message = assistant_message or self._completion_message()
+        if prefix_message:
+            assistant_message = f"{prefix_message}\n\n{assistant_message}"
         self.context.record_message("assistant", assistant_message)
         return self._build_response(
             assistant_message=assistant_message,
@@ -400,20 +477,17 @@ class ConversationOrchestrator:
             prompt = self._expense_collection_prompt()
         self.context.set_stage(ConversationState.COLLECTING_EXPENSES)
         self.context.record_message("assistant", prompt)
-        return self._build_response(
+        return self._build_stage_response(
             assistant_message=prompt,
-            plan=ExecutionPlan(
-                pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
-                next_action="collect_expenses",
-                prompt=prompt,
-                metadata={"stage": "COLLECTING_EXPENSES"},
-            ),
+            stage=ConversationState.COLLECTING_EXPENSES,
+            next_action="collect_expenses",
+            metadata={"stage": "COLLECTING_EXPENSES"},
         )
 
     def _expense_collection_prompt(self) -> str:
         return (
             "Please list the expenses you incurred. "
-            "After each expense, I?ll ask if you want to add another expense. "
+            "After each expense, I'll ask if you want to add another expense. "
             "Type DONE if you have finished entering expenses."
         )
 
@@ -427,14 +501,11 @@ class ConversationOrchestrator:
             prompt = self._missing_field_prompt()
         self.context.set_stage(ConversationState.WAITING_USER)
         self.context.record_message("assistant", prompt)
-        return self._build_response(
+        return self._build_stage_response(
             assistant_message=prompt,
-            plan=ExecutionPlan(
-                pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
-                next_action="collect_information",
-                prompt=prompt,
-                metadata={"missing_fields": self.context.missing_fields(self.REQUIRED_FIELDS)},
-            ),
+            stage=ConversationState.WAITING_USER,
+            next_action="collect_information",
+            metadata={"missing_fields": self.context.missing_fields(self.REQUIRED_FIELDS)},
         )
 
     def _missing_field_prompt(self) -> str:
@@ -452,13 +523,11 @@ class ConversationOrchestrator:
         self.context.set_stage(ConversationState.CANCELLED)
         assistant_message = "Conversation cancelled. No claim was persisted."
         self.context.record_message("assistant", assistant_message)
-        return self._build_response(
+        return self._build_stage_response(
             assistant_message=assistant_message,
-            plan=ExecutionPlan(
-                pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
-                next_action="cancel",
-                metadata={"reason": "user_cancelled"},
-            ),
+            stage=ConversationState.CANCELLED,
+            next_action="cancel",
+            metadata={"reason": "user_cancelled"},
         )
 
     def _record_execution(self, execution_result: Mapping[str, Any] | None) -> None:
@@ -579,6 +648,65 @@ class ConversationOrchestrator:
                 if key in payload:
                     return payload[key]
         return default
+
+    def _needs_receipt_collection(self) -> bool:
+        if self.context.confirmation is not True or self.context.claim_id is not None:
+            return False
+        required_slots = self._required_receipt_slots()
+        if not required_slots:
+            self.context.receipts_complete = True
+            return False
+        return not self.context.receipts_complete
+
+    def _has_pending_receipt_collection(self) -> bool:
+        if self.context.claim_id is not None or self.context.receipts_complete:
+            return False
+        return bool(self._required_receipt_slots())
+
+    def _required_receipt_slots(self) -> list[dict[str, Any]]:
+        return self.context.required_receipt_slots()
+
+    def _receipt_collection_intro_prompt(self) -> str:
+        categories = self.context.required_receipt_categories()
+        current_slot = self.context.next_pending_receipt_slot()
+        lines = [
+            (
+                "Before submitting your expense claim, receipts are required for the "
+                "following expense categories:"
+            ),
+            "",
+        ]
+        lines.extend(f"{index}. {category}" for index, category in enumerate(categories, start=1))
+        lines.extend(["", "Let's upload them one at a time."])
+        if current_slot is not None:
+            lines.extend(["", self._receipt_prompt_for_slot(current_slot)])
+        return "\n".join(lines)
+
+    def _receipt_prompt_for_slot(self, slot: Mapping[str, Any]) -> str:
+        category = str(slot.get("category", "receipt")).upper()
+        return f"Please provide the local file path for the {category} receipt."
+
+    def _build_stage_response(
+        self,
+        *,
+        assistant_message: str,
+        stage: ConversationState,
+        next_action: str,
+        metadata: Mapping[str, Any] | None = None,
+        execution_result: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.context.set_stage(stage)
+        plan = ExecutionPlan(
+            pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
+            next_action=next_action,
+            prompt=assistant_message,
+            metadata=dict(metadata or {}),
+        )
+        return self._build_response(
+            assistant_message=assistant_message,
+            plan=plan,
+            execution_result=execution_result,
+        )
 
     def _build_response(
         self,

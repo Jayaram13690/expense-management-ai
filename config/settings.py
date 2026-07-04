@@ -122,6 +122,35 @@ class WorkflowSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WORKFLOW_", extra="forbid")
 
 
+class ReceiptUploadSettings(BaseSettings):
+    """Receipt upload configuration."""
+
+    s3_bucket: str = "expense-management-ai-receipts"
+    max_file_size_mb: int = 10
+    upload_retry_count: int = 1
+    upload_timeout_seconds: int = 30
+
+    @field_validator("s3_bucket")
+    def validate_bucket_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("S3 bucket name cannot be empty")
+        return v
+
+    @field_validator("max_file_size_mb", "upload_timeout_seconds")
+    def validate_positive_int(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Value must be greater than 0")
+        return v
+
+    @field_validator("upload_retry_count")
+    def validate_retry_count(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Upload retry count cannot be negative")
+        return v
+
+    model_config = SettingsConfigDict(env_prefix="RECEIPT_UPLOAD_", extra="forbid")
+
+
 class ApplicationSettings(BaseSettings):
     """Core application configuration.
 
@@ -173,6 +202,7 @@ class Settings(BaseSettings):
     dynamodb: DynamoDBSettings = DynamoDBSettings()
     logging: LoggingSettings = LoggingSettings()
     workflow: WorkflowSettings = WorkflowSettings()
+    receipt_upload: ReceiptUploadSettings = ReceiptUploadSettings()
 
     model_config = SettingsConfigDict(extra="forbid")
 

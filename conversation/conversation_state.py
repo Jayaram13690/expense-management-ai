@@ -8,6 +8,7 @@ class ConversationState(StrEnum):
 
     ACTIVE = "active"
     COLLECTING_EXPENSES = "collecting_expenses"
+    COLLECTING_RECEIPTS = "collecting_receipts"
     WAITING_USER = "waiting_user"
     EXECUTING = "executing"
     COMPLETED = "completed"
