@@ -4,8 +4,8 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date
-from typing import Any
+from datetime import date, datetime
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -16,6 +16,10 @@ from conversation.conversation_state import ConversationState
 def _normalize_value(value: Any) -> Any:
     """Convert model-like objects into plain Python data."""
 
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, BaseModel):
         return value.model_dump()
     if hasattr(value, "model_dump") and callable(value.model_dump):
@@ -34,6 +38,8 @@ def _normalize_value(value: Any) -> Any:
 @dataclass
 class ConversationContext:
     """In-memory conversation memory for the orchestration layer."""
+
+    TRIP_DATE_FORMATS: ClassVar[tuple[str, ...]] = ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y")
 
     employee_id: str | None = None
     trip_name: str | None = None
@@ -314,9 +320,8 @@ class ConversationContext:
             return None
 
         if field_name in {"trip_start_date", "trip_end_date"}:
-            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text.strip()):
-                return text.strip()
-            return None
+            parsed = self.parse_trip_date_value(text)
+            return parsed.isoformat() if parsed is not None else None
 
         if field_name in {
             "trip_name",
@@ -326,6 +331,69 @@ class ConversationContext:
             return text.strip()
 
         return text
+
+    def parse_trip_date_value(self, value: Any) -> date | None:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if not isinstance(value, str):
+            return None
+
+        text = value.strip()
+        if not text:
+            return None
+
+        for fmt in self.TRIP_DATE_FORMATS:
+            try:
+                return datetime.strptime(text, fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    def validate_trip_date_value(
+        self,
+        field_name: str,
+        value: Any,
+        *,
+        current_trip_start_date: Any | None = None,
+        today: date | None = None,
+    ) -> tuple[str | None, str | None]:
+        """Validate and normalize a trip date input."""
+
+        parsed_value = self.parse_trip_date_value(value)
+        if parsed_value is None:
+            if field_name == "trip_start_date":
+                return None, (
+                    "I couldn't understand that date. Please enter the trip "
+                    "start date in YYYY-MM-DD format."
+                )
+            return None, (
+                "I couldn't understand that date. Please enter the trip "
+                "end date in YYYY-MM-DD format."
+            )
+
+        if field_name == "trip_start_date":
+            current_day = today or date.today()
+            if parsed_value > current_day:
+                return None, (
+                    "The trip start date cannot be later than today.\n\n"
+                    f"Today's date is:\n{current_day.isoformat()}\n\n"
+                    "Please enter the trip start date in YYYY-MM-DD format."
+                )
+            return parsed_value.isoformat(), None
+
+        if field_name == "trip_end_date":
+            start_value = self.parse_trip_date_value(current_trip_start_date)
+            if start_value is not None and parsed_value < start_value:
+                return None, (
+                    "The trip end date cannot be earlier than the trip start date.\n\n"
+                    f"Your current trip start date is:\n{start_value.isoformat()}\n\n"
+                    "Please enter a valid trip end date."
+                )
+            return parsed_value.isoformat(), None
+
+        return parsed_value.isoformat(), None
 
 
 __all__ = ["ConversationContext"]

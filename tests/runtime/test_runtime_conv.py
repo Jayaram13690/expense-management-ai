@@ -1,4 +1,5 @@
 import sys
+from collections.abc import Mapping
 
 sys.path.insert(0, ".")
 
@@ -13,11 +14,44 @@ from conversation.orchestrator import ConversationOrchestrator
 
 def print_response(response):
     print("\n" + "=" * 80)
-    print("STATE:", response.get("state"))
-    print("PLAN :", response.get("plan"))
+    # print("STATE:", response.get("state"))
+    # print("PLAN :", response.get("plan"))
     print("\nASSISTANT:\n")
-    print(response.get("assistant_message"))
+    print(_extract_assistant_text(response))
     print("=" * 80)
+
+
+def _extract_assistant_text(response):
+    if isinstance(response, Mapping):
+        message = response.get("assistant_message")
+        if message is not None:
+            return message
+        if response.get("response") is not None:
+            return response["response"]
+        return response
+
+    message = getattr(response, "message", None)
+    if isinstance(message, str):
+        return message
+    if isinstance(message, Mapping):
+        for key in ("assistant_message", "content", "text", "response"):
+            value = message.get(key)
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                parts = []
+                for item in value:
+                    if isinstance(item, Mapping):
+                        text = item.get("text") or item.get("content")
+                        if isinstance(text, str):
+                            parts.append(text)
+                    elif isinstance(item, str):
+                        parts.append(item)
+                if parts:
+                    return "\n".join(parts)
+    if hasattr(response, "text") and isinstance(response.text, str):
+        return response.text
+    return str(response)
 
 
 employee_agent = EmployeeAgent()
@@ -54,4 +88,4 @@ while True:
 
     response = coordinator.route_message(user_input)
 
-    # print_response(response)
+    print_response(response)

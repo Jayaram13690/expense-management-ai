@@ -77,10 +77,10 @@ async def _expense_side_effect(payload: object, **_: object) -> dict[str, object
         text = payload.strip()
         try:
             structured = json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as err:
             if "claim status" in text.lower() or "status of claim" in text.lower():
                 return {"claim_id": "CLM1001", "status": "submitted"}
-            raise AssertionError(f"Unexpected expense prompt: {payload}")
+            raise AssertionError(f"Unexpected expense prompt: {payload}") from err
     else:
         raise AssertionError(f"Unexpected expense prompt type: {type(payload)}")
 
@@ -322,3 +322,48 @@ def test_end_to_end_runtime_claim_lifecycle():
     assert orchestrator.receipt_agent._agent.invoke_async.call_count == 1
     assert orchestrator.context.claim_id == "CLM-1001"
     assert orchestrator.context.confirmation is True
+
+
+def test_trip_start_date_rejects_future_date_and_keeps_context():
+    orchestrator = _build_orchestrator()
+    orchestrator.context.apply_updates(
+        {
+            "employee_id": "EMP0006",
+            "trip_name": "AWS Summit Bangalore 2026",
+            "business_purpose": "Evaluate AWS Agentic AI for enterprise expense workflows.",
+            "destination": "Bangalore",
+        }
+    )
+
+    result = orchestrator.process_turn("2027-07-01")
+
+    assert result["state"] == ConversationState.WAITING_USER.value
+    assert "trip start date cannot be later than today" in result["assistant_message"].lower()
+    assert orchestrator.context.trip_start_date is None
+    assert orchestrator.context.execution_stage == ConversationState.WAITING_USER
+
+
+def test_trip_end_date_rejects_earlier_date_and_clears_existing_value():
+    orchestrator = _build_orchestrator()
+    orchestrator.context.apply_updates(
+        {
+            "employee_id": "EMP0006",
+            "trip_name": "AWS Summit Bangalore 2026",
+            "business_purpose": "Evaluate AWS Agentic AI for enterprise expense workflows.",
+            "destination": "Bangalore",
+            "trip_start_date": "2026-07-01",
+        }
+    )
+    orchestrator.context.expense_collection_complete = True
+    orchestrator.context.set_stage(ConversationState.WAITING_USER)
+
+    result = orchestrator.process_turn("2026-06-30")
+
+    assert result["state"] == ConversationState.WAITING_USER.value
+    assert (
+        "trip end date cannot be earlier than the trip start date"
+        in result["assistant_message"].lower()
+    )
+    assert orchestrator.context.trip_start_date == "2026-07-01"
+    assert orchestrator.context.trip_end_date is None
+    assert orchestrator.context.execution_stage == ConversationState.WAITING_USER

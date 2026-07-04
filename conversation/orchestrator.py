@@ -93,7 +93,9 @@ class ConversationOrchestrator:
         if self.context.execution_stage == ConversationState.COLLECTING_EXPENSES:
             return self._handle_expense_collection_turn(message, extracted_data)
 
-        updates = self._collect_updates(message, extracted_data)
+        updates, validation_prompt = self._collect_updates_with_validation(message, extracted_data)
+        if validation_prompt:
+            return self._prompt_for_information(validation_prompt)
         if updates:
             self.context.apply_updates(updates)
 
@@ -196,6 +198,81 @@ class ConversationOrchestrator:
 
         return updates
 
+    def _collect_updates_with_validation(
+        self,
+        message: str,
+        extracted_data: Mapping[str, Any] | None,
+    ) -> tuple[dict[str, Any], str | None]:
+        updates = self._collect_updates(message, extracted_data)
+        current_field = self._current_expected_field()
+
+        if (
+            not updates
+            and current_field in {"trip_start_date", "trip_end_date"}
+            and message.strip()
+        ):
+            normalized_value, validation_prompt = self.context.validate_trip_date_value(
+                current_field,
+                message,
+                current_trip_start_date=self.context.trip_start_date,
+            )
+            if validation_prompt:
+                if current_field == "trip_end_date":
+                    self.context.trip_end_date = None
+                return {}, validation_prompt
+            if normalized_value is not None:
+                updates[current_field] = normalized_value
+
+        return self._validate_trip_date_updates(updates)
+
+    def _validate_trip_date_updates(
+        self, updates: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], str | None]:
+        if not updates:
+            return {}, None
+
+        normalized_updates: dict[str, Any] = dict(updates)
+
+        if "trip_start_date" in normalized_updates:
+            normalized_value, validation_prompt = self.context.validate_trip_date_value(
+                "trip_start_date",
+                normalized_updates["trip_start_date"],
+            )
+            if validation_prompt:
+                return {}, validation_prompt
+            normalized_updates["trip_start_date"] = normalized_value
+
+        start_candidate = normalized_updates.get("trip_start_date", self.context.trip_start_date)
+
+        if "trip_end_date" in normalized_updates:
+            normalized_value, validation_prompt = self.context.validate_trip_date_value(
+                "trip_end_date",
+                normalized_updates["trip_end_date"],
+                current_trip_start_date=start_candidate,
+            )
+            if validation_prompt:
+                self.context.trip_end_date = None
+                return {}, validation_prompt
+            normalized_updates["trip_end_date"] = normalized_value
+
+        start_value = normalized_updates.get("trip_start_date", self.context.trip_start_date)
+        end_value = normalized_updates.get("trip_end_date", self.context.trip_end_date)
+        start_dt = self.context.parse_trip_date_value(start_value)
+        end_dt = self.context.parse_trip_date_value(end_value)
+        if start_dt is not None and end_dt is not None and end_dt < start_dt:
+            self.context.trip_end_date = None
+            return {}, (
+                "The trip end date cannot be earlier than the trip start date.\n\n"
+                f"Your current trip start date is:\n{start_dt.isoformat()}\n\n"
+                "Please enter a valid trip end date."
+            )
+
+        return normalized_updates, None
+
+    def _current_expected_field(self) -> str | None:
+        missing_fields = self.context.missing_fields(self.REQUIRED_FIELDS)
+        return missing_fields[0] if missing_fields else None
+
     def _handle_expense_collection_turn(
         self,
         message: str,
@@ -247,7 +324,9 @@ class ConversationOrchestrator:
     def _resume_after_expense_collection(
         self, extracted_data: Mapping[str, Any] | None
     ) -> dict[str, Any]:
-        updates = self._collect_updates("", extracted_data)
+        updates, validation_prompt = self._collect_updates_with_validation("", extracted_data)
+        if validation_prompt:
+            return self._prompt_for_information(validation_prompt)
         if updates:
             self.context.apply_updates(updates)
 
