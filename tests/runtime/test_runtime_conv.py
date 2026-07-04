@@ -47,11 +47,11 @@ print("\nExpense Management AI")
 print("Type 'exit' to quit.\n")
 
 while True:
-    user_input = input("You : ")
+    user_input = input("\nYou : ")
 
     if user_input.lower() == "exit":
         break
 
     response = coordinator.route_message(user_input)
 
-    print_response(response)
+    # print_response(response)
