@@ -8,6 +8,8 @@ wheels/
 
 receipts-img/
 
+tests/.tmp
+
 *.json
 
 # Virtual environments
