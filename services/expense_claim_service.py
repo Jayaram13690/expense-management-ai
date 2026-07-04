@@ -37,7 +37,8 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from pprint import pprint
+
+# from pprint import pprint
 from uuid import uuid4
 
 from common.identifiers import ClaimId, EmployeeId
@@ -1051,10 +1052,10 @@ class ExpenseClaimService(BaseService):
             claim:
                 The fully constructed ExpenseClaim aggregate.
         """
-        item = claim.to_dynamodb_item()
-        print("\n================ DYNAMODB ITEM ================\n")
-        pprint(item)
-        print("\n===============================================\n")
+        # item = claim.to_dynamodb_item()
+        # print("\n================ DYNAMODB ITEM ================\n")
+        # pprint(item)
+        # print("\n===============================================\n")
 
         self.claim_repository.save(claim)
 
