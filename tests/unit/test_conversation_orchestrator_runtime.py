@@ -30,10 +30,41 @@ def _build_orchestrator(receipt_upload_side_effect=None) -> ConversationOrchestr
     approval_agent.get_approval_result = Mock(
         return_value={"approval_id": "APR-2001", "status": "pending"}
     )
+    approval_agent.create_approval_request = Mock(
+        return_value={
+            "success": True,
+            "status": "PENDING",
+            "assistant_message": "Approval request created successfully.",
+            "next_state": "receipt",
+            "approval_result": {
+                "approval_id": "APR-2001",
+                "claim_id": "CLM-1001",
+                "employee_id": "EMP0006",
+                "approver_id": "MGR001",
+                "approver_name": "Asha Rao",
+                "status": "PENDING",
+            },
+        }
+    )
 
     receipt_agent = ReceiptAgent()
     receipt_agent.upload_receipt_file = Mock(
         side_effect=receipt_upload_side_effect or _receipt_upload_side_effect
+    )
+    receipt_agent.send_manager_approval_email = Mock(
+        return_value={
+            "success": True,
+            "status": "sent",
+            "assistant_message": (
+                "Claim submitted successfully. Claim ID: CLM-1001\n"
+                "The approval request was emailed successfully."
+            ),
+            "next_state": "completed",
+            "receipt_result": {
+                "status": "sent",
+                "recipient_email": "dev@example.com",
+            },
+        }
     )
     receipt_agent.generate_receipt_result = Mock(
         return_value={"receipt_id": "RCT-3001", "status": "generated"}
@@ -232,6 +263,46 @@ def test_duplicate_receipt_upload_is_rejected_without_losing_existing_uploads():
     assert "TAXI" not in orchestrator.context.receipt_uploads
 
 
+def test_duplicate_claim_resets_submission_flow_and_preserves_history():
+    orchestrator = _build_orchestrator()
+
+    duplicate_seen = {"count": 0}
+
+    def duplicate_then_preview(*_: object, **__: object) -> dict[str, object]:
+        duplicate_seen["count"] += 1
+        if duplicate_seen["count"] == 1:
+            raise ServiceException(
+                message="Expense claim already exists for this employee and trip.",
+                error_code="CLAIM_ALREADY_EXISTS",
+            )
+        return _preview_side_effect()
+
+    orchestrator.expense_agent.preview_claim_request.side_effect = duplicate_then_preview
+
+    result = orchestrator.process_turn(
+        "I want to submit an expense claim.",
+        extracted_data=_claim_data(),
+    )
+
+    assert result["success"] is False
+    assert result["reason"] == "CLAIM_ALREADY_EXISTS"
+    assert result["conversation_completed"] is True
+    assert result["next_state"] == ConversationState.ACTIVE.value
+    assert result["state"] == ConversationState.ACTIVE.value
+    assert orchestrator.context.employee_id is None
+    assert orchestrator.context.trip_name is None
+    assert orchestrator.context.expense_items == []
+    assert orchestrator.context.confirmation is None
+    assert orchestrator.context.claim_id is None
+    assert orchestrator.context.execution_stage == ConversationState.ACTIVE
+    assert orchestrator.context.conversation_history
+
+    follow_up = orchestrator.process_turn("What is my employee grade?")
+    assert follow_up["state"] == ConversationState.WAITING_USER.value
+    assert orchestrator.employee_agent.get_employee_profile.call_count == 1
+    assert orchestrator.expense_agent.preview_claim_request.call_count == 1
+
+
 def test_receipt_upload_can_be_cancelled_and_resumed():
     orchestrator = _build_orchestrator()
 
@@ -268,8 +339,8 @@ def test_successful_receipt_collection_submits_claim_and_generates_acknowledgeme
 
     assert "Submitting your claim" in result["assistant_message"]
     assert "Claim submitted successfully" in result["assistant_message"]
-    assert orchestrator.approval_agent.get_approval_result.call_count == 1
-    assert orchestrator.receipt_agent.generate_receipt_result.call_count == 1
+    assert orchestrator.approval_agent.create_approval_request.call_count == 1
+    assert orchestrator.receipt_agent.send_manager_approval_email.call_count == 1
 
 
 def test_unknown_expense_category_requests_clarification_without_crashing():

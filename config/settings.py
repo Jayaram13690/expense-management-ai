@@ -151,6 +151,29 @@ class ReceiptUploadSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RECEIPT_UPLOAD_", extra="forbid")
 
 
+class NotificationSettings(BaseSettings):
+    """Notification configuration for manager and employee emails."""
+
+    notification_email: str = Field(default="", validation_alias="NOTIFICATION_EMAIL")
+    sender_email: str = Field(default="", validation_alias="NOTIFICATION_SENDER_EMAIL")
+    email_retry_count: int = 1
+    email_timeout_seconds: int = 30
+
+    @field_validator("email_retry_count")
+    def validate_email_retry_count(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Email retry count cannot be negative")
+        return v
+
+    @field_validator("email_timeout_seconds")
+    def validate_email_timeout(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Email timeout must be greater than 0")
+        return v
+
+    model_config = SettingsConfigDict(env_prefix="NOTIFICATION_", extra="forbid")
+
+
 class ApplicationSettings(BaseSettings):
     """Core application configuration.
 
@@ -197,12 +220,13 @@ class Settings(BaseSettings):
         workflow: Workflow and processing settings
     """
 
-    app: ApplicationSettings = ApplicationSettings()
-    aws: AWSSettings = AWSSettings()
-    dynamodb: DynamoDBSettings = DynamoDBSettings()
-    logging: LoggingSettings = LoggingSettings()
-    workflow: WorkflowSettings = WorkflowSettings()
-    receipt_upload: ReceiptUploadSettings = ReceiptUploadSettings()
+    app: ApplicationSettings = Field(default_factory=ApplicationSettings)
+    aws: AWSSettings = Field(default_factory=AWSSettings)
+    dynamodb: DynamoDBSettings = Field(default_factory=DynamoDBSettings)
+    logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    workflow: WorkflowSettings = Field(default_factory=WorkflowSettings)
+    receipt_upload: ReceiptUploadSettings = Field(default_factory=ReceiptUploadSettings)
+    notifications: NotificationSettings = Field(default_factory=NotificationSettings)
 
     model_config = SettingsConfigDict(extra="forbid")
 
@@ -211,15 +235,11 @@ class Settings(BaseSettings):
         """Load settings from environment variables and .env file."""
         from dotenv import load_dotenv
 
-        # Load environment variables from .env file
         load_dotenv()
-
-        # Create settings instance
         settings = cls()
         return settings
 
 
-# Singleton instance for global access
 settings = Settings.load_from_env()
 
 

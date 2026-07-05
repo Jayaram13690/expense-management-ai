@@ -26,6 +26,7 @@ class CoordinatorAgent(BaseAgent):
         "RECEIPT_QUERY",
         "UNKNOWN",
     }
+    _NOTIFICATION_RETRY_COMMANDS = {"retry", "resend", "continue"}
 
     def __init__(
         self,
@@ -72,12 +73,17 @@ class CoordinatorAgent(BaseAgent):
         message: str,
         extracted_data: Mapping[str, Any] | None = None,
     ) -> Any:
-        """Route a user message to the appropriate conversational path."""
-
         if self._has_active_conversation():
             return self.conversation_orchestrator.process_turn(
                 message, extracted_data=extracted_data
             )
+
+        if self._has_pending_notification() and self._is_notification_retry(message):
+            return self.receipt_agent.retry_pending_notification()
+
+        approval_command = self.approval_agent.parse_decision_command(message)
+        if self.approval_agent.has_pending_rejection() or approval_command is not None:
+            return self._route_approval_message(message)
 
         intent = self.classify_intent(message)
 
@@ -93,15 +99,13 @@ class CoordinatorAgent(BaseAgent):
         if intent == "EMPLOYEE_QUERY":
             return self.employee_agent.invoke(message)
         if intent == "APPROVAL_QUERY":
-            return self.approval_agent.invoke(message)
+            return self._route_approval_message(message)
         if intent == "RECEIPT_QUERY":
             return self.receipt_agent.invoke(message)
 
         return self._clarification_response()
 
     def classify_intent(self, message: str) -> str:
-        """Classify the user's request into a supported intent label."""
-
         prompt = self._classification_prompt(message)
         raw_response = self.invoke(prompt)
         return self._normalize_intent(raw_response)
@@ -135,6 +139,197 @@ class CoordinatorAgent(BaseAgent):
             context.execution_results,
         )
         return any(value not in (None, "", [], {}) for value in fields)
+
+    def _route_approval_message(self, message: str) -> dict[str, Any] | Any:
+        if self.approval_agent.has_pending_rejection():
+            return self._continue_pending_rejection(message)
+
+        command = self.approval_agent.parse_decision_command(message)
+        if command is None:
+            if self._has_pending_notification() and self._is_notification_retry(message):
+                return self.receipt_agent.retry_pending_notification()
+            return self.approval_agent.invoke(message)
+
+        claim_id = str(command["claim_id"])
+        claim_status = self._resolve_claim_status(claim_id)
+        if claim_status.get("success") is False:
+            return claim_status
+
+        employee_id = claim_status.get("employee_id")
+        if not isinstance(employee_id, str) or not employee_id.strip():
+            return self._structured_error(
+                error_code="EMPLOYEE_NOT_FOUND",
+                assistant_message="I couldn't resolve the employee for that claim.",
+                recoverable=False,
+            )
+
+        employee_profile = self._resolve_employee_profile(employee_id)
+        if isinstance(employee_profile, Mapping) and employee_profile.get("success") is False:
+            return employee_profile
+
+        manager_id = employee_profile.manager_id
+        if not manager_id:
+            return self._structured_error(
+                error_code="MANAGER_NOT_FOUND",
+                assistant_message="Unable to locate the employee's manager.",
+                recoverable=True,
+            )
+
+        manager_profile = self._resolve_employee_profile(manager_id)
+        if isinstance(manager_profile, Mapping) and manager_profile.get("success") is False:
+            return manager_profile
+
+        decision_result = self.approval_agent.process_decision(
+            claim_id=claim_id,
+            decision=str(command["decision"]),
+            approver_id=manager_profile.employee_id,
+            approver_name=manager_profile.employee_name or manager_profile.employee_id,
+            reason=command.get("reason"),
+        )
+        if decision_result.get("success") is False:
+            return decision_result
+
+        updated_status = self._resolve_claim_status(claim_id)
+        if updated_status.get("success") is False:
+            return updated_status
+
+        notification_result = self.receipt_agent.send_employee_decision_email(
+            claim_id=claim_id,
+            approval_result=decision_result.get("approval_result", {}),
+            claim_status=updated_status,
+        )
+        if notification_result.get("success") is False:
+            notification_result["assistant_message"] = (
+                f"{decision_result.get('assistant_message', '')}\n\n"
+                f"{notification_result.get('assistant_message', '')}"
+            ).strip()
+            notification_result["approval_result"] = decision_result.get("approval_result")
+            return notification_result
+
+        return {
+            "success": True,
+            "status": decision_result.get("status"),
+            "approval_result": decision_result.get("approval_result"),
+            "assistant_message": (
+                f"{decision_result.get('assistant_message', '')}\n\n"
+                f"{notification_result.get('assistant_message', '')}"
+            ).strip(),
+            "next_state": "completed",
+        }
+
+    def _continue_pending_rejection(self, message: str) -> dict[str, Any]:
+        claim_id = self.approval_agent._pending_rejection["claim_id"]
+        claim_status = self._resolve_claim_status(claim_id)
+        if claim_status.get("success") is False:
+            return claim_status
+
+        employee_id = claim_status.get("employee_id")
+        if not isinstance(employee_id, str) or not employee_id.strip():
+            return self._structured_error(
+                error_code="EMPLOYEE_NOT_FOUND",
+                assistant_message="I couldn't resolve the employee for that claim.",
+                recoverable=False,
+            )
+
+        employee_profile = self._resolve_employee_profile(employee_id)
+        if isinstance(employee_profile, Mapping) and employee_profile.get("success") is False:
+            return employee_profile
+
+        manager_id = employee_profile.manager_id
+        if not manager_id:
+            return self._structured_error(
+                error_code="MANAGER_NOT_FOUND",
+                assistant_message="Unable to locate the employee's manager.",
+                recoverable=True,
+            )
+
+        manager_profile = self._resolve_employee_profile(manager_id)
+        if isinstance(manager_profile, Mapping) and manager_profile.get("success") is False:
+            return manager_profile
+
+        decision_result = self.approval_agent.process_pending_rejection_reason(
+            message,
+            approver_id=manager_profile.employee_id,
+            approver_name=manager_profile.employee_name or manager_profile.employee_id,
+        )
+        if decision_result.get("success") is False:
+            return decision_result
+
+        updated_status = self._resolve_claim_status(claim_id)
+        if updated_status.get("success") is False:
+            return updated_status
+
+        notification_result = self.receipt_agent.send_employee_decision_email(
+            claim_id=claim_id,
+            approval_result=decision_result.get("approval_result", {}),
+            claim_status=updated_status,
+        )
+        if notification_result.get("success") is False:
+            notification_result["assistant_message"] = (
+                f"{decision_result.get('assistant_message', '')}\n\n"
+                f"{notification_result.get('assistant_message', '')}"
+            ).strip()
+            notification_result["approval_result"] = decision_result.get("approval_result")
+            return notification_result
+
+        return {
+            "success": True,
+            "status": decision_result.get("status"),
+            "approval_result": decision_result.get("approval_result"),
+            "assistant_message": (
+                f"{decision_result.get('assistant_message', '')}\n\n"
+                f"{notification_result.get('assistant_message', '')}"
+            ).strip(),
+            "next_state": "completed",
+        }
+
+    def _resolve_claim_status(self, claim_id: str) -> dict[str, Any]:
+        try:
+            result = self.expense_agent.get_claim_status(claim_id)
+        except Exception as exc:
+            return self._structured_error(
+                error_code=getattr(exc, "error_code", exc.__class__.__name__.upper()),
+                assistant_message=getattr(exc, "message", str(exc)),
+                recoverable=False,
+            )
+        if isinstance(result, Mapping):
+            return dict(result)
+        return self._structured_error(
+            error_code="CLAIM_NOT_FOUND",
+            assistant_message=f"Claim {claim_id} could not be found.",
+            recoverable=False,
+        )
+
+    def _resolve_employee_profile(self, employee_id: str) -> Any:
+        try:
+            return self.employee_agent.get_employee_profile(employee_id)
+        except Exception as exc:
+            return self._structured_error(
+                error_code=getattr(exc, "error_code", exc.__class__.__name__.upper()),
+                assistant_message=getattr(exc, "message", str(exc)),
+                recoverable=False,
+            )
+
+    def _has_pending_notification(self) -> bool:
+        return self.receipt_agent.has_pending_notification()
+
+    def _is_notification_retry(self, message: str) -> bool:
+        return message.strip().lower() in self._NOTIFICATION_RETRY_COMMANDS
+
+    def _structured_error(
+        self,
+        *,
+        error_code: str,
+        assistant_message: str,
+        recoverable: bool,
+    ) -> dict[str, Any]:
+        return {
+            "success": False,
+            "error_code": error_code,
+            "assistant_message": assistant_message,
+            "recoverable": recoverable,
+            "next_state": "waiting_user",
+        }
 
     def _build_system_prompt(self) -> str:
         return (

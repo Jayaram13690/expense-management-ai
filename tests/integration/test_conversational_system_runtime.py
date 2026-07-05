@@ -32,12 +32,17 @@ def _build_system() -> CoordinatorAgent:
     employee_agent.get_employee_profile = Mock(side_effect=_employee_profile_side_effect)
 
     expense_agent = _stub_agent(ExpenseAgent(), _expense_side_effect)
+    expense_agent.get_claim_status = Mock(side_effect=_claim_status_side_effect)
+    expense_agent.preview_claim_request = Mock(side_effect=_preview_claim_side_effect)
+    expense_agent.submit_claim_request = Mock(side_effect=_submit_claim_side_effect)
     policy_agent = _stub_agent(PolicyAgent(), _policy_side_effect)
     policy_agent.check_employee_eligibility = Mock(side_effect=_policy_eligibility_side_effect)
     policy_agent.get_category_limits = Mock(side_effect=_policy_limits_side_effect)
 
     approval_agent = _stub_agent(ApprovalAgent(), _approval_side_effect)
+    approval_agent.create_approval_request = Mock(side_effect=_create_approval_request_side_effect)
     receipt_agent = _stub_agent(ReceiptAgent(), _receipt_side_effect)
+    receipt_agent.send_manager_approval_email = Mock(side_effect=_send_manager_email_side_effect)
 
     orchestrator = ConversationOrchestrator(
         employee_agent=employee_agent,
@@ -96,7 +101,7 @@ async def _policy_side_effect(prompt: str, **_: object) -> dict[str, object]:
             "eligible": True,
             "daily_limit": "5000",
             "monthly_limit": "20000",
-            "receipt_required": True,
+            "receipt_required": False,
             "approval_required": False,
         }
     if "category_identifier: taxi" in lower:
@@ -104,7 +109,7 @@ async def _policy_side_effect(prompt: str, **_: object) -> dict[str, object]:
             "eligible": True,
             "daily_limit": "1500",
             "monthly_limit": "10000",
-            "receipt_required": True,
+            "receipt_required": False,
             "approval_required": False,
         }
     raise AssertionError(f"Unexpected policy prompt: {prompt}")
@@ -160,6 +165,92 @@ def _employee_profile_side_effect(employee_id: str) -> EmployeeProfile:
     )
 
 
+def _claim_status_side_effect(claim_id: str) -> dict[str, object]:
+    return {
+        "success": True,
+        "claim_id": claim_id,
+        "status": "submitted",
+        "employee_id": "EMP0006",
+        "employee_name": "Asha Rao",
+        "approved_amount": "6500",
+        "reimbursable_amount": "6500",
+    }
+
+
+def _preview_claim_side_effect(*_: object, **__: object) -> dict[str, object]:
+    return {
+        "total_requested": "6700",
+        "total_approved": "6500",
+        "variance": "200",
+        "warnings": ["Policy limits applied"],
+    }
+
+
+def _submit_claim_side_effect(*_: object, **__: object) -> dict[str, object]:
+    return {
+        "claim_id": "CLM-1001",
+        "status": "submitted",
+    }
+
+
+def _create_approval_request_side_effect(**_: object) -> dict[str, object]:
+    return {
+        "success": True,
+        "status": "PENDING",
+        "assistant_message": "Approval request created successfully.",
+        "next_state": "receipt",
+        "approval_result": {
+            "approval_id": "APR-2001",
+            "claim_id": "CLM-1001",
+            "employee_id": "EMP0006",
+            "approver_id": "MGR001",
+            "approver_name": "Asha Rao",
+            "status": "PENDING",
+        },
+    }
+
+
+def _send_manager_email_side_effect(**_: object) -> dict[str, object]:
+    return {
+        "success": True,
+        "status": "sent",
+        "assistant_message": (
+            "Claim CLM-1001 was submitted and the approval request was emailed successfully."
+        ),
+        "next_state": "completed",
+        "receipt_result": {
+            "status": "sent",
+            "recipient_email": "dev@example.com",
+        },
+    }
+
+
+def _policy_eligibility_side_effect(category_identifier: str, employee_grade: str) -> bool:
+    assert employee_grade == "G5"
+    assert category_identifier.upper() in {"HOTEL", "TAXI"}
+    return True
+
+
+def _policy_limits_side_effect(category_identifier: str, employee_grade: str) -> dict[str, object]:
+    assert employee_grade == "G5"
+    category = category_identifier.upper()
+    if category == "HOTEL":
+        return {
+            "daily_limit": "5000",
+            "monthly_limit": "20000",
+            "receipt_required": False,
+            "approval_required": False,
+        }
+    if category == "TAXI":
+        return {
+            "daily_limit": "1500",
+            "monthly_limit": "10000",
+            "receipt_required": False,
+            "approval_required": False,
+        }
+    raise AssertionError(f"Unexpected policy category: {category_identifier}")
+
+
 def _claim_data() -> dict[str, object]:
     return {
         "employee_id": "EMP0006",
@@ -203,7 +294,7 @@ def test_end_to_end_conversational_claim_submission_uses_real_agents():
         == 2
     )
     assert coordinator.conversation_orchestrator.policy_agent.get_category_limits.call_count == 2
-    assert coordinator.conversation_orchestrator.expense_agent._agent.invoke_async.call_count == 1
+    assert coordinator.conversation_orchestrator.expense_agent.preview_claim_request.call_count == 1
 
     policy_context = coordinator.conversation_orchestrator.context.get_execution_result(
         "policy_context"
@@ -214,8 +305,14 @@ def test_end_to_end_conversational_claim_submission_uses_real_agents():
 
     second_turn = coordinator.route_message("YES")
     assert second_turn["state"] == ConversationState.COMPLETED.value
-    assert coordinator.conversation_orchestrator.expense_agent._agent.invoke_async.call_count == 2
-    assert coordinator.conversation_orchestrator.approval_agent._agent.invoke_async.call_count == 1
-    assert coordinator.conversation_orchestrator.receipt_agent._agent.invoke_async.call_count == 1
+    assert coordinator.conversation_orchestrator.expense_agent.preview_claim_request.call_count == 1
+    assert coordinator.conversation_orchestrator.expense_agent.submit_claim_request.call_count == 1
+    assert (
+        coordinator.conversation_orchestrator.approval_agent.create_approval_request.call_count == 1
+    )
+    assert (
+        coordinator.conversation_orchestrator.receipt_agent.send_manager_approval_email.call_count
+        == 1
+    )
     assert coordinator.conversation_orchestrator.context.claim_id == "CLM-1001"
     assert coordinator.conversation_orchestrator.context.confirmation is True

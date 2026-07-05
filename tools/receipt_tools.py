@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +25,17 @@ def _s3_client():
         config=Config(
             connect_timeout=settings.receipt_upload.upload_timeout_seconds,
             read_timeout=settings.receipt_upload.upload_timeout_seconds,
+        ),
+    )
+
+
+def _ses_client():
+    return boto3.client(
+        "ses",
+        region_name=settings.aws.aws_region,
+        config=Config(
+            connect_timeout=settings.notifications.email_timeout_seconds,
+            read_timeout=settings.notifications.email_timeout_seconds,
         ),
     )
 
@@ -49,6 +64,65 @@ def upload_receipt(
         "key": key,
         "content_type": content_type,
         "file_name": path.name,
+    }
+
+
+def download_receipt_attachment(*, bucket: str, key: str) -> dict[str, Any]:
+    """Download a receipt object from S3 for email attachment use."""
+
+    response = _s3_client().get_object(Bucket=bucket, Key=key)
+    body = response["Body"].read()
+    content_type = response.get("ContentType") or "application/octet-stream"
+    file_name = Path(key).name
+    return {
+        "bucket": bucket,
+        "key": key,
+        "file_name": file_name,
+        "content_type": content_type,
+        "content_bytes": body,
+    }
+
+
+def send_notification_email(
+    *,
+    subject: str,
+    body_text: str,
+    recipient_email: str,
+    sender_email: str,
+    attachments: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Send an email through SES, optionally with binary attachments."""
+
+    message = MIMEMultipart()
+    message["Subject"] = subject
+    message["From"] = sender_email
+    message["To"] = recipient_email
+    message.attach(MIMEText(body_text, "plain", "utf-8"))
+
+    for attachment in attachments or []:
+        payload = attachment.get("content_bytes", b"")
+        if not isinstance(payload, (bytes, bytearray)):
+            payload = bytes(str(payload), "utf-8")
+        content_type = str(attachment.get("content_type") or "application/octet-stream")
+        maintype, _, subtype = content_type.partition("/")
+        mime_part = MIMEApplication(payload, _subtype=subtype or "octet-stream")
+        file_name = str(attachment.get("file_name") or "attachment")
+        mime_part.add_header("Content-Disposition", "attachment", filename=file_name)
+        if maintype:
+            mime_part.replace_header("Content-Type", content_type)
+        message.attach(mime_part)
+
+    _ses_client().send_raw_email(
+        Source=sender_email,
+        Destinations=[recipient_email],
+        RawMessage={"Data": message.as_string()},
+    )
+
+    return {
+        "status": "sent",
+        "recipient_email": recipient_email,
+        "subject": subject,
+        "attachment_count": len(list(attachments or [])),
     }
 
 

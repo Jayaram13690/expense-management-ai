@@ -511,34 +511,46 @@ class ConversationOrchestrator:
                         execution_result = self._sequential.execute_employee(self.context)
                     elif plan.next_action == "expense_preview":
                         execution_result = self._sequential.execute_expense_preview(self.context)
-                        assistant_message = self._preview_message(execution_result)
-                        self.context.set_stage(ConversationState.WAITING_USER)
-                        plan = ExecutionPlan(
-                            pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
-                            next_action="await_confirmation",
-                            prompt=assistant_message,
-                            metadata={"stage": "WAITING_CONFIRMATION"},
-                        )
-                        break
                     elif plan.next_action == "expense_submission":
                         execution_result = self._sequential.execute_expense_submission(self.context)
                     elif plan.next_action == "approval":
                         execution_result = self._sequential.execute_approval(self.context)
                     elif plan.next_action == "receipt":
                         execution_result = self._sequential.execute_receipt(self.context)
-                        assistant_message = self._completion_message()
-                        self.context.set_stage(ConversationState.COMPLETED)
-                        break
                     else:
-                        assistant_message = (
-                            plan.prompt or "I need a bit more information to continue."
+                        assistant_message = plan.prompt or (
+                            "I need a bit more information to continue."
                         )
                         self.context.set_stage(ConversationState.WAITING_USER)
                         break
                 except Exception as exc:
                     return self._handle_execution_exception(exc)
 
+                if execution_result and execution_result.get("success") is False:
+                    return self._handle_execution_result_failure(execution_result)
+
                 self._record_execution(execution_result)
+
+                if plan.next_action == "expense_preview":
+                    assistant_message = self._preview_message(execution_result or {})
+                    self.context.set_stage(ConversationState.WAITING_USER)
+                    plan = ExecutionPlan(
+                        pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
+                        next_action="await_confirmation",
+                        prompt=assistant_message,
+                        metadata={"stage": "WAITING_CONFIRMATION"},
+                    )
+                    break
+
+                if plan.next_action == "receipt":
+                    assistant_message = (
+                        execution_result.get("assistant_message")
+                        if isinstance(execution_result, Mapping)
+                        else None
+                    ) or self._completion_message()
+                    self.context.set_stage(ConversationState.COMPLETED)
+                    break
+
                 continue
 
             if plan.pattern == ExecutionPattern.PARALLEL:
@@ -546,6 +558,8 @@ class ConversationOrchestrator:
                     execution_result = self._parallel.execute(self.context)
                 except Exception as exc:
                     return self._handle_execution_exception(exc)
+                if execution_result and execution_result.get("success") is False:
+                    return self._handle_execution_result_failure(execution_result)
                 self._record_execution(execution_result)
                 if self._needs_category_clarification():
                     return self._prompt_for_category_clarification()
@@ -691,7 +705,15 @@ class ConversationOrchestrator:
         )
 
     def _completion_message(self) -> str:
-        return f"Claim submitted successfully. Claim ID: {self.context.claim_id or 'N/A'}"
+        receipt_result = self.context.get_execution_result("receipt_result")
+        if isinstance(receipt_result, Mapping):
+            message = receipt_result.get("assistant_message")
+            if isinstance(message, str) and message.strip():
+                return message
+        return (
+            f"Claim submitted successfully. Claim ID: {self.context.claim_id or 'N/A'}\n"
+            "The manager approval request has been prepared."
+        )
 
     def _format_variance(self, claimed_amount: Any, approved_amount: Any) -> str:
         try:
@@ -830,6 +852,64 @@ class ConversationOrchestrator:
             "execution_result": execution_result,
         }
 
+    def _handle_execution_result_failure(
+        self,
+        execution_result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        error_code = str(execution_result.get("error_code") or "")
+        recoverable = bool(execution_result.get("recoverable", False))
+        assistant_message = str(
+            execution_result.get("assistant_message") or "I couldn't continue that step right now."
+        )
+        conversation_completed = False
+
+        if error_code == "CLAIM_ALREADY_EXISTS":
+            assistant_message = (
+                "A claim already exists for this employee and trip.\n\n"
+                "Please change the trip name, travel dates, or expense details if this "
+                "is a new claim.\n"
+                "If you want to review the existing claim instead, ask me for its status."
+            )
+            conversation_completed = True
+        elif not recoverable:
+            conversation_completed = True
+
+        if conversation_completed:
+            self.context.reset_submission_flow()
+            self.context.record_message("assistant", assistant_message)
+            plan = ExecutionPlan(
+                pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
+                next_action="complete",
+                prompt=assistant_message,
+                metadata={"stage": "ACTIVE", "reason": error_code or "FATAL_FAILURE"},
+            )
+            return {
+                "success": False,
+                "reason": error_code or "FATAL_FAILURE",
+                "conversation_completed": True,
+                "assistant_message": assistant_message,
+                "next_state": ConversationState.ACTIVE.value,
+                "state": self.context.execution_stage.value,
+                "conversation_stage": self._response_state(plan),
+                "plan": plan.to_dict(),
+                "context": self.context.snapshot(),
+                "execution_result": dict(execution_result),
+            }
+
+        self.context.set_stage(ConversationState.WAITING_USER)
+        self.context.record_message("assistant", assistant_message)
+        return self._build_stage_response(
+            assistant_message=assistant_message,
+            stage=ConversationState.WAITING_USER,
+            next_action="collect_information",
+            metadata={
+                "stage": execution_result.get("stage_name", "WAITING_USER"),
+                "error_code": error_code or execution_result.get("error_code"),
+                "recoverable": recoverable,
+            },
+            execution_result=execution_result,
+        )
+
     def _handle_execution_exception(self, exc: Exception) -> dict[str, Any]:
         if self._needs_category_clarification():
             return self._prompt_for_category_clarification()
@@ -838,17 +918,18 @@ class ConversationOrchestrator:
             "I couldn't continue with that expense entry yet. "
             "Please review the claim details and try again."
         )
-        self.context.set_stage(ConversationState.WAITING_USER)
+        self.context.reset_submission_flow()
         self.context.record_message("assistant", assistant_message)
-        return self._build_stage_response(
-            assistant_message=assistant_message,
-            stage=ConversationState.WAITING_USER,
-            next_action="collect_information",
-            metadata={
-                "stage": "COLLECTING_INFORMATION",
-                "error": str(exc),
-            },
-        )
+        return {
+            "success": False,
+            "reason": "FATAL_FAILURE",
+            "conversation_completed": True,
+            "assistant_message": assistant_message,
+            "next_state": ConversationState.ACTIVE.value,
+            "state": self.context.execution_stage.value,
+            "conversation_stage": ConversationState.ACTIVE.value,
+            "context": self.context.snapshot(),
+        }
 
     def _response_state(self, plan: ExecutionPlan) -> str:
         if self.context.execution_stage == ConversationState.COMPLETED:

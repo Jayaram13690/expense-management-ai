@@ -33,121 +33,192 @@ class SequentialExecution:
         self.receipt_agent = receipt_agent
 
     def execute_employee(self, context: ConversationContext) -> dict[str, Any]:
-        """Retrieve the employee profile."""
         if not context.employee_id:
-            raise ValueError("Employee ID is required before employee retrieval")
+            return self._error_result(
+                stage_name="EMPLOYEE",
+                error_code="EMPLOYEE_ID_MISSING",
+                assistant_message="Employee ID is required before employee retrieval.",
+                recoverable=True,
+            )
 
-        employee_profile = self.employee_agent.get_employee_profile(context.employee_id)
+        try:
+            employee_profile = self.employee_agent.get_employee_profile(context.employee_id)
+        except Exception as exc:
+            return self._error_result(
+                stage_name="EMPLOYEE",
+                error_code=getattr(exc, "error_code", exc.__class__.__name__.upper()),
+                assistant_message=str(exc),
+                recoverable=True,
+            )
+
         context.employee_profile = employee_profile
         context.store_execution_result("employee_profile", employee_profile)
-
         return {
+            "success": True,
             "pattern": ExecutionPattern.SEQUENTIAL.value,
             "stage_name": "EMPLOYEE",
             "employee_profile": employee_profile,
+            "assistant_message": "Employee profile retrieved successfully.",
+            "next_state": "policy",
         }
 
     def execute_expense_preview(self, context: ConversationContext) -> dict[str, Any]:
-        """Generate a claim preview after policy data is available."""
-        claim_request = self._build_claim_request(context)
-        claim_preview = self._plain_value(
-            self.expense_agent.preview_claim_request(
-                claim_request,
-                employee_profile=context.employee_profile,
-                policy_context=context.policy_context,
+        try:
+            claim_request = self._build_claim_request(context)
+            claim_preview = self._plain_value(
+                self.expense_agent.preview_claim_request(
+                    claim_request,
+                    employee_profile=context.employee_profile,
+                    policy_context=context.policy_context,
+                )
             )
-        )
+        except Exception as exc:
+            return self._error_result(
+                stage_name="PREVIEW",
+                error_code=getattr(exc, "error_code", exc.__class__.__name__.upper()),
+                assistant_message=str(exc),
+                recoverable=True,
+            )
+
         context.claim_preview = claim_preview
         context.store_execution_result("claim_preview", claim_preview)
-
         return {
+            "success": True,
             "pattern": ExecutionPattern.SEQUENTIAL.value,
             "stage_name": "PREVIEW",
             "claim_preview": claim_preview,
+            "assistant_message": "Claim preview generated successfully.",
+            "next_state": "confirmation",
         }
 
     def execute_expense_submission(self, context: ConversationContext) -> dict[str, Any]:
-        """Submit the confirmed expense claim."""
-        claim_request = self._build_claim_request(context)
-        submitted_claim = self._plain_value(
-            self.expense_agent.submit_claim_request(
-                claim_request,
-                employee_profile=context.employee_profile,
-                policy_context=context.policy_context,
+        try:
+            claim_request = self._build_claim_request(context)
+            submitted_claim = self._plain_value(
+                self.expense_agent.submit_claim_request(
+                    claim_request,
+                    employee_profile=context.employee_profile,
+                    policy_context=context.policy_context,
+                )
             )
-        )
-        context.store_execution_result("submitted_claim", submitted_claim)
+        except Exception as exc:
+            return self._error_result(
+                stage_name="SUBMISSION",
+                error_code=getattr(exc, "error_code", exc.__class__.__name__.upper()),
+                assistant_message=str(exc),
+                recoverable=True,
+            )
 
+        context.store_execution_result("submitted_claim", submitted_claim)
         claim_id = self._extract_claim_id(submitted_claim)
         if claim_id:
             context.claim_id = claim_id
 
         return {
+            "success": True,
             "pattern": ExecutionPattern.SEQUENTIAL.value,
             "stage_name": "SUBMISSION",
             "submitted_claim": submitted_claim,
+            "assistant_message": f"Claim submitted successfully. Claim ID: {claim_id or 'N/A'}",
+            "next_state": "approval",
         }
 
     def execute_approval(self, context: ConversationContext) -> dict[str, Any]:
-        """Create the approval request."""
         if not context.claim_id:
-            raise ValueError("Claim ID is required before approval execution")
+            return self._error_result(
+                stage_name="APPROVAL",
+                error_code="CLAIM_ID_MISSING",
+                assistant_message="Claim ID is required before approval execution.",
+                recoverable=False,
+            )
 
-        approval_result = self._plain_value(
-            self.approval_agent.get_approval_result(context.claim_id)
+        employee_profile = context.employee_profile or context.get_execution_result(
+            "employee_profile"
         )
-        context.store_execution_result("approval_result", approval_result)
+        if not isinstance(employee_profile, EmployeeProfile):
+            return self._error_result(
+                stage_name="APPROVAL",
+                error_code="EMPLOYEE_PROFILE_MISSING",
+                assistant_message=(
+                    "Employee profile is required before creating the approval request."
+                ),
+                recoverable=False,
+            )
+        if not employee_profile.manager_id:
+            return self._error_result(
+                stage_name="APPROVAL",
+                error_code="MANAGER_NOT_FOUND",
+                assistant_message="Unable to locate the employee's manager.",
+                recoverable=True,
+            )
 
-        return {
-            "pattern": ExecutionPattern.SEQUENTIAL.value,
-            "stage_name": "APPROVAL",
-            "approval_result": approval_result,
-        }
+        try:
+            manager_profile = self.employee_agent.get_employee_profile(employee_profile.manager_id)
+        except Exception as exc:
+            return self._error_result(
+                stage_name="APPROVAL",
+                error_code=getattr(exc, "error_code", exc.__class__.__name__.upper()),
+                assistant_message="Unable to locate the employee's manager.",
+                recoverable=True,
+            )
+
+        context.store_execution_result("manager_profile", manager_profile)
+        result = self.approval_agent.create_approval_request(
+            claim_id=context.claim_id,
+            employee_profile=employee_profile,
+            manager_profile=manager_profile,
+        )
+        result.setdefault("pattern", ExecutionPattern.SEQUENTIAL.value)
+        result.setdefault("stage_name", "APPROVAL")
+        return result
 
     def execute_receipt(self, context: ConversationContext) -> dict[str, Any]:
-        """Generate the acknowledgement payload."""
         if not context.claim_id:
-            raise ValueError("Claim ID is required before receipt execution")
+            return self._error_result(
+                stage_name="RECEIPT",
+                error_code="CLAIM_ID_MISSING",
+                assistant_message="Claim ID is required before receipt execution.",
+                recoverable=False,
+            )
 
-        receipt_result = self._plain_value(
-            self.receipt_agent.generate_receipt_result(context.claim_id)
+        approval_result = context.get_execution_result("approval_result")
+        if not isinstance(approval_result, Mapping):
+            return self._error_result(
+                stage_name="RECEIPT",
+                error_code="APPROVAL_RESULT_MISSING",
+                assistant_message=(
+                    "Approval request details are missing, so the manager notification "
+                    "cannot be sent."
+                ),
+                recoverable=True,
+            )
+
+        claim_snapshot = self._plain_value(
+            context.get_execution_result("submitted_claim") or {"claim_id": context.claim_id}
         )
-        context.store_execution_result("receipt_result", receipt_result)
+        claim_snapshot.setdefault("employee_id", context.employee_id)
+        claim_snapshot.setdefault("trip_name", context.trip_name)
+        claim_snapshot.setdefault("business_purpose", context.business_purpose)
+        claim_snapshot.setdefault("destination", context.destination)
+        claim_snapshot.setdefault("trip_start_date", context.trip_start_date)
+        claim_snapshot.setdefault("trip_end_date", context.trip_end_date)
+        claim_snapshot.setdefault("expense_items", list(context.expense_items))
 
-        return {
-            "pattern": ExecutionPattern.SEQUENTIAL.value,
-            "stage_name": "RECEIPT",
-            "receipt_result": receipt_result,
-        }
-
-    def _employee_prompt(self, context: ConversationContext) -> str:
-        return (
-            "Retrieve the employee profile for employee_id "
-            f"{context.employee_id} using the available tools."
-        )
-
-    def _expense_prompt(self, context: ConversationContext, *, action: str) -> str:
-        claim = self._build_claim_request(context).model_dump(exclude_none=True)
-        employee_profile = self._plain_value(
-            context.employee_profile or context.get_execution_result("employee_profile") or {}
-        )
         policy_context = self._plain_value(
             context.policy_context or context.get_execution_result("policy_context") or {}
         )
-        return self._json_prompt(
-            self._orchestration_payload(
-                {
-                    "task": action,
-                    "employee_profile": employee_profile,
-                    "policy_context": policy_context,
-                    "claim": claim,
-                },
-                {
-                    "preview": {"claim_preview": "canonical JSON only"},
-                    "submit": {"submitted_claim": "canonical JSON only"},
-                },
-            )
+        claim_preview = self._plain_value(context.claim_preview or {})
+        result = self.receipt_agent.send_manager_approval_email(
+            claim_id=context.claim_id,
+            approval_result=dict(approval_result),
+            claim_snapshot=claim_snapshot,
+            claim_preview=claim_preview,
+            policy_context=policy_context,
+            receipt_uploads=context.receipt_uploads,
         )
+        result.setdefault("pattern", ExecutionPattern.SEQUENTIAL.value)
+        result.setdefault("stage_name", "RECEIPT")
+        return result
 
     def _build_claim_request(self, context: ConversationContext) -> SubmitExpenseClaimRequest:
         expense_items = []
@@ -188,12 +259,6 @@ class SequentialExecution:
             return [self._plain_value(item) for item in value]
         return value
 
-    def _has_only_keys(self, value: Any, allowed: set[str], *, required: set[str]) -> bool:
-        if not isinstance(value, Mapping):
-            return False
-        keys = {str(key) for key in value}
-        return required.issubset(keys) and keys.issubset(allowed)
-
     def _extract_claim_id(self, result: Any) -> str | None:
         if hasattr(result, "model_dump") and callable(result.model_dump):
             result = result.model_dump()
@@ -203,6 +268,24 @@ class SequentialExecution:
                 return value
         return getattr(result, "claim_id", None)
 
+    def _error_result(
+        self,
+        *,
+        stage_name: str,
+        error_code: str,
+        assistant_message: str,
+        recoverable: bool,
+    ) -> dict[str, Any]:
+        return {
+            "success": False,
+            "pattern": ExecutionPattern.SEQUENTIAL.value,
+            "stage_name": stage_name,
+            "error_code": error_code,
+            "assistant_message": assistant_message,
+            "recoverable": recoverable,
+            "next_state": "waiting_user",
+        }
+
 
 class ParallelExecution:
     """Execute independent policy checks concurrently."""
@@ -211,8 +294,6 @@ class ParallelExecution:
         self.policy_agent = policy_agent
 
     def execute(self, context: ConversationContext) -> dict[str, Any]:
-        """Run eligibility and limits lookups concurrently for each category."""
-
         employee_grade = self._employee_grade(context)
         existing_policy_context = self._existing_policy_context(context)
         existing_categories = set(existing_policy_context.categories.keys())
@@ -285,6 +366,7 @@ class ParallelExecution:
         if category_clarifications:
             context.store_execution_result("partial_policy_context", policy_context)
             return {
+                "success": True,
                 "pattern": ExecutionPattern.PARALLEL.value,
                 "stage_name": "POLICY",
                 "tasks": ["check_employee_eligibility", "get_category_limits"],
@@ -299,6 +381,7 @@ class ParallelExecution:
         context.execution_results.pop("partial_policy_context", None)
 
         return {
+            "success": True,
             "pattern": ExecutionPattern.PARALLEL.value,
             "stage_name": "POLICY",
             "tasks": ["check_employee_eligibility", "get_category_limits"],
@@ -439,60 +522,6 @@ class HumanInTheLoopExecution:
             "Do you want to submit?"
         )
 
-    def _format_variance(self, claimed_amount: Any, approved_amount: Any) -> str:
-        try:
-            claimed = (
-                claimed_amount
-                if isinstance(claimed_amount, (int, float))
-                else float(str(claimed_amount))
-            )
-            approved = (
-                approved_amount
-                if isinstance(approved_amount, (int, float))
-                else float(str(approved_amount))
-            )
-            return f"{claimed - approved:.2f}"
-        except (TypeError, ValueError):
-            return "N/A"
-
-    def _format_warnings(self, warnings: Any) -> str:
-        if isinstance(warnings, list) and warnings:
-            return "; ".join(str(item) for item in warnings)
-        if warnings:
-            return str(warnings)
-        return "No warnings"
-
-    def _policy_limits_summary(self, context: ConversationContext) -> str:
-        policy_context = context.policy_context
-        if policy_context is None:
-            return "No policy limits available"
-
-        payload = (
-            policy_context.model_dump()
-            if hasattr(policy_context, "model_dump") and callable(policy_context.model_dump)
-            else policy_context
-        )
-        categories = payload.get("categories", {}) if isinstance(payload, Mapping) else {}
-        if not isinstance(categories, Mapping) or not categories:
-            return "No policy limits available"
-
-        parts: list[str] = []
-        for category, details in categories.items():
-            if hasattr(details, "model_dump") and callable(details.model_dump):
-                details = details.model_dump()
-            if not isinstance(details, Mapping):
-                continue
-            limits = details.get("limits", {})
-            if hasattr(limits, "model_dump") and callable(limits.model_dump):
-                limits = limits.model_dump()
-            if isinstance(limits, Mapping) and limits:
-                limit_bits = ", ".join(f"{key}={value}" for key, value in limits.items())
-            else:
-                limit_bits = "No limits available"
-            parts.append(f"{category}: {limit_bits}")
-
-        return "; ".join(parts) if parts else "No policy limits available"
-
     def interpret(self, message: str) -> bool | None:
         normalized = message.strip().lower()
         if normalized in {"yes", "y", "confirm", "submit"}:
@@ -512,16 +541,14 @@ class HumanInTheLoopExecution:
 
     def _format_variance(self, claimed_amount: Any, approved_amount: Any) -> str:
         try:
-            claimed = (
-                claimed_amount
-                if isinstance(claimed_amount, (int, float))
-                else float(str(claimed_amount))
-            )
-            approved = (
-                approved_amount
-                if isinstance(approved_amount, (int, float))
-                else float(str(approved_amount))
-            )
+            claimed_text = claimed_amount
+            if not isinstance(claimed_amount, (int, float)):
+                claimed_text = str(claimed_amount)
+            approved_text = approved_amount
+            if not isinstance(approved_amount, (int, float)):
+                approved_text = str(approved_amount)
+            claimed = float(claimed_text)
+            approved = float(approved_text)
             return f"{claimed - approved:.2f}"
         except (TypeError, ValueError):
             return "N/A"

@@ -3,7 +3,6 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from agents.approval_agent import ApprovalAgent
@@ -15,6 +14,7 @@ from agents.receipt_agent import ReceiptAgent
 from contracts import EmployeeProfile
 from conversation.conversation_state import ConversationState
 from conversation.orchestrator import ConversationOrchestrator
+from exceptions.service import ServiceException
 
 AgentType = EmployeeAgent | ExpenseAgent | PolicyAgent | ApprovalAgent | ReceiptAgent
 
@@ -32,12 +32,21 @@ def _build_coordinator() -> CoordinatorAgent:
     employee_agent.get_employee_profile = Mock(side_effect=_employee_profile_side_effect)
 
     expense_agent = _stub_agent(ExpenseAgent(), _expense_side_effect)
+    expense_agent.get_claim_status = Mock(side_effect=_claim_status_side_effect)
+    expense_agent.preview_claim_request = Mock(side_effect=_preview_claim_side_effect)
+    expense_agent.submit_claim_request = Mock(side_effect=_submit_claim_side_effect)
     policy_agent = _stub_agent(PolicyAgent(), _policy_side_effect)
     policy_agent.check_employee_eligibility = Mock(side_effect=_policy_eligibility_side_effect)
     policy_agent.get_category_limits = Mock(side_effect=_policy_limits_side_effect)
 
     approval_agent = _stub_agent(ApprovalAgent(), _approval_side_effect)
+    approval_agent.create_approval_request = Mock(side_effect=_create_approval_request_side_effect)
+    approval_agent.process_decision = Mock(side_effect=_process_decision_side_effect)
     receipt_agent = _stub_agent(ReceiptAgent(), _receipt_side_effect)
+    receipt_agent.send_manager_approval_email = Mock(side_effect=_send_manager_email_side_effect)
+    receipt_agent.send_employee_decision_email = Mock(
+        side_effect=_send_employee_decision_email_side_effect
+    )
 
     orchestrator = ConversationOrchestrator(
         employee_agent=employee_agent,
@@ -105,7 +114,7 @@ async def _policy_side_effect(prompt: str, **_: object) -> dict[str, object]:
                 "eligible": True,
                 "daily_limit": "5000" if category == "hotel" else "1500",
                 "monthly_limit": "20000" if category == "hotel" else "10000",
-                "receipt_required": True,
+                "receipt_required": False,
                 "approval_required": False,
             }
         raise AssertionError(f"Unexpected policy prompt: {prompt}")
@@ -126,7 +135,7 @@ async def _expense_side_effect(payload: object, **_: object) -> dict[str, object
         except json.JSONDecodeError:
             if "claim status" in text.lower() or "status of claim" in text.lower():
                 return {"claim_id": "CLM1001", "status": "submitted"}
-            raise AssertionError(f"Unexpected expense prompt: {payload}")
+            raise AssertionError(f"Unexpected expense prompt: {payload}") from None
 
         task = structured["task"]
         if task == "preview":
@@ -189,14 +198,107 @@ async def _receipt_side_effect(prompt: str, **_: object) -> dict[str, object]:
     raise AssertionError(f"Unexpected receipt prompt: {prompt}")
 
 
-def _employee_profile_side_effect() -> EmployeeProfile:
+def _employee_profile_side_effect(employee_id: str) -> EmployeeProfile:
     return EmployeeProfile(
-        employee_id="EMP0006",
+        employee_id=employee_id,
         employee_name="Asha Rao",
         employee_grade="G5",
         department="Engineering",
         manager_id="MGR001",
     )
+
+
+def _claim_status_side_effect(claim_id: str) -> dict[str, object]:
+    return {
+        "success": True,
+        "claim_id": claim_id,
+        "status": "submitted",
+        "employee_id": "EMP0006",
+        "employee_name": "Asha Rao",
+        "approved_amount": "6500",
+        "reimbursable_amount": "6500",
+    }
+
+
+def _preview_claim_side_effect(*_: object, **__: object) -> dict[str, object]:
+    return {
+        "total_requested": "6700",
+        "total_approved": "6500",
+        "variance": "200",
+        "warnings": ["Policy limits applied"],
+    }
+
+
+def _submit_claim_side_effect(*_: object, **__: object) -> dict[str, object]:
+    return {
+        "claim_id": "CLM-1001",
+        "status": "submitted",
+    }
+
+
+def _create_approval_request_side_effect(**_: object) -> dict[str, object]:
+    return {
+        "success": True,
+        "status": "PENDING",
+        "assistant_message": "Approval request created successfully.",
+        "next_state": "receipt",
+        "approval_result": {
+            "approval_id": "APR-2001",
+            "claim_id": "CLM-1001",
+            "employee_id": "EMP0006",
+            "approver_id": "MGR001",
+            "approver_name": "Asha Rao",
+            "status": "PENDING",
+        },
+    }
+
+
+def _process_decision_side_effect(**kwargs: object) -> dict[str, object]:
+    claim_id = str(kwargs.get("claim_id", "CLM1001"))
+    decision = str(kwargs.get("decision", "approve")).lower()
+    status = "APPROVED" if decision == "approve" else "REJECTED"
+    verb = "approved" if decision == "approve" else "rejected"
+    return {
+        "success": True,
+        "status": status,
+        "assistant_message": f"Claim {claim_id} has been {verb}.",
+        "next_state": "completed",
+        "approval_result": {
+            "approval_id": "APR-2001",
+            "claim_id": claim_id,
+            "status": status,
+            "approver_id": "MGR001",
+            "approver_name": "Asha Rao",
+        },
+    }
+
+
+def _send_manager_email_side_effect(**_: object) -> dict[str, object]:
+    return {
+        "success": True,
+        "status": "sent",
+        "assistant_message": (
+            "Claim CLM-1001 was submitted and the approval request was emailed successfully."
+        ),
+        "next_state": "completed",
+        "receipt_result": {
+            "status": "sent",
+            "recipient_email": "dev@example.com",
+        },
+    }
+
+
+def _send_employee_decision_email_side_effect(**_: object) -> dict[str, object]:
+    return {
+        "success": True,
+        "status": "sent",
+        "assistant_message": "Employee notification for claim CLM1001 was sent successfully.",
+        "next_state": "completed",
+        "receipt_result": {
+            "status": "sent",
+            "recipient_email": "dev@example.com",
+        },
+    }
 
 
 def _policy_eligibility_side_effect(category_identifier: str, employee_grade: str) -> bool:
@@ -212,14 +314,14 @@ def _policy_limits_side_effect(category_identifier: str, employee_grade: str) ->
         return {
             "daily_limit": "5000",
             "monthly_limit": "20000",
-            "receipt_required": True,
+            "receipt_required": False,
             "approval_required": False,
         }
     if category == "TAXI":
         return {
             "daily_limit": "1500",
             "monthly_limit": "10000",
-            "receipt_required": True,
+            "receipt_required": False,
             "approval_required": False,
         }
     raise AssertionError(f"Unexpected policy category: {category_identifier}")
@@ -274,9 +376,10 @@ def test_submit_expense_claim_routes_through_orchestrator_and_resumes():
     assert second["state"] == ConversationState.COMPLETED.value
     assert coordinator.conversation_orchestrator.process_turn.call_count == 2
     assert coordinator._agent.invoke_async.call_count == 1
-    assert coordinator.expense_agent._agent.invoke_async.call_count == 2
-    assert coordinator.approval_agent._agent.invoke_async.call_count == 1
-    assert coordinator.receipt_agent._agent.invoke_async.call_count == 1
+    assert coordinator.expense_agent.preview_claim_request.call_count == 1
+    assert coordinator.expense_agent.submit_claim_request.call_count == 1
+    assert coordinator.approval_agent.create_approval_request.call_count == 1
+    assert coordinator.receipt_agent.send_manager_approval_email.call_count == 1
 
 
 def test_policy_lookup_bypasses_orchestrator():
@@ -306,8 +409,8 @@ def test_approval_workflow_bypasses_orchestrator():
 
     result = coordinator.route_message("Approve claim CLM1001")
 
-    assert result["status"] == "approved"
-    assert coordinator.approval_agent._agent.invoke_async.call_count == 1
+    assert result["status"] == "APPROVED"
+    assert coordinator.approval_agent.process_decision.call_count == 1
     assert coordinator.conversation_orchestrator.process_turn.call_count == 0
 
 
@@ -339,6 +442,54 @@ def test_unknown_request_requests_clarification():
     assert result["intent"] == "UNKNOWN"
     assert "What would you like to do" in result["response"]
     assert coordinator.conversation_orchestrator.process_turn.call_count == 0
+
+
+def test_duplicate_claim_resets_lifecycle_and_allows_fresh_routing():
+    coordinator = _build_coordinator()
+
+    duplicate_seen = {"count": 0}
+
+    def duplicate_then_preview(*_: object, **__: object) -> dict[str, object]:
+        duplicate_seen["count"] += 1
+        if duplicate_seen["count"] == 1:
+            raise ServiceException(
+                message="Expense claim already exists for this employee and trip.",
+                error_code="CLAIM_ALREADY_EXISTS",
+            )
+        return _preview_claim_side_effect()
+
+    coordinator.conversation_orchestrator.expense_agent.preview_claim_request.side_effect = (
+        duplicate_then_preview
+    )
+
+    duplicate_response = coordinator.route_message(
+        "I want to submit an expense claim.", extracted_data=_claim_data()
+    )
+
+    assert duplicate_response["success"] is False
+    assert duplicate_response["reason"] == "CLAIM_ALREADY_EXISTS"
+    assert duplicate_response["conversation_completed"] is True
+    assert duplicate_response["state"] == ConversationState.ACTIVE.value
+    assert coordinator.conversation_orchestrator.context.employee_id is None
+    assert coordinator.conversation_orchestrator.context.expense_items == []
+    assert coordinator.conversation_orchestrator.context.execution_stage == ConversationState.ACTIVE
+
+    status_response = coordinator.route_message("What is the status of claim CLM1001?")
+    assert status_response["status"] == "submitted"
+    assert coordinator.expense_agent._agent.invoke_async.call_count == 1
+    assert coordinator.conversation_orchestrator.process_turn.call_count == 1
+
+    employee_response = coordinator.route_message("What is my employee grade?")
+    assert employee_response["employee_grade"] == "G5"
+    assert coordinator.employee_agent._agent.invoke_async.call_count == 1
+    assert coordinator.conversation_orchestrator.process_turn.call_count == 1
+
+    refreshed = coordinator.route_message(
+        "I want to submit an expense claim.", extracted_data=_claim_data()
+    )
+    assert refreshed["state"] == ConversationState.WAITING_USER.value
+    assert duplicate_seen["count"] == 2
+    assert coordinator.conversation_orchestrator.process_turn.call_count == 2
 
 
 def test_coordinator_agent_contains_only_routing_logic():

@@ -480,6 +480,30 @@ class ConversationContext:
         self.execution_results.clear()
         self.execution_stage = ConversationState.ACTIVE
 
+    def reset_submission_flow(self) -> None:
+        """Clear the active claim workflow while preserving conversation history."""
+
+        self.employee_id = None
+        self.trip_name = None
+        self.business_purpose = None
+        self.destination = None
+        self.trip_start_date = None
+        self.trip_end_date = None
+        self.expense_items.clear()
+        self.expense_collection_complete = False
+        self.employee_profile = None
+        self.policy_context = None
+        self.claim_preview = None
+        self.confirmation = None
+        self.claim_id = None
+        self.draft_claim_id = None
+        self.receipt_uploads.clear()
+        self.receipts_complete = False
+        self.receipt_upload_paused = False
+        self.category_clarifications.clear()
+        self.execution_results.clear()
+        self.execution_stage = ConversationState.ACTIVE
+
     def _parse_structured_payload(self, text: str) -> Any:
         cleaned = text.strip()
         if cleaned.startswith("```"):
