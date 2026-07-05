@@ -43,6 +43,7 @@ from uuid import uuid4
 
 from common.identifiers import ClaimId, EmployeeId
 from config.enums import ClaimStatus
+from exceptions.repository import RepositoryException
 from exceptions.service import ServiceException
 from models.claim_amount import ClaimAmount
 from models.dto.claim_preview import ClaimPreview, ExpenseItemResult
@@ -139,6 +140,8 @@ class ExpenseClaimService(BaseService):
             trip_name=request.trip_name,
             trip_start_date=request.trip_start_date,
             trip_end_date=request.trip_end_date,
+            destination=request.destination,
+            expense_categories=[item.category_code for item in request.expense_items],
         )
         if duplicates:
             raise ServiceException(
@@ -187,11 +190,22 @@ class ExpenseClaimService(BaseService):
         self._validate_trip_dates(request)
         self._validate_items(request)
 
+        business_key = self._build_business_key(
+            employee_id=request.employee_id,
+            trip_name=request.trip_name,
+            destination=request.destination,
+            trip_start_date=request.trip_start_date,
+            trip_end_date=request.trip_end_date,
+            expense_categories=[item.category_code for item in request.expense_items],
+        )
+
         duplicates = self.detect_duplicate_claims(
             employee_id=request.employee_id,
             trip_name=request.trip_name,
             trip_start_date=request.trip_start_date,
             trip_end_date=request.trip_end_date,
+            destination=request.destination,
+            expense_categories=[item.category_code for item in request.expense_items],
         )
         if duplicates:
             raise ServiceException(
@@ -201,7 +215,27 @@ class ExpenseClaimService(BaseService):
 
         line_items = self._calculate_line_items(employee, request)
         claim = self._build_claim(employee, request, line_items)
-        self._persist_claim(claim)
+        claim.business_key = business_key
+
+        try:
+            self._persist_claim(claim)
+        except RepositoryException as exc:
+            if exc.error_code == "CLAIM_ALREADY_EXISTS":
+                duplicate_claim = self.claim_repository.get_claim_by_business_key(business_key)
+                raise ServiceException(
+                    message="Expense claim already exists for this employee and trip.",
+                    error_code="CLAIM_ALREADY_EXISTS",
+                    metadata={
+                        "business_key": business_key,
+                        "duplicate_claim": (
+                            duplicate_claim.model_dump(mode="python")
+                            if duplicate_claim is not None
+                            else exc.metadata.get("duplicate_claim")
+                        ),
+                    },
+                    cause=exc,
+                ) from exc
+            raise
 
         self.log_success("Submit Expense Claim")
         return claim
@@ -581,6 +615,47 @@ class ExpenseClaimService(BaseService):
             remarks=remarks,
         )
 
+    @staticmethod
+    def _normalize_business_key_text(value: str) -> str:
+        return " ".join(value.strip().split()).lower()
+
+    @staticmethod
+    def _normalize_business_key_employee(value: str) -> str:
+        return " ".join(value.strip().split()).upper()
+
+    @staticmethod
+    def _normalize_business_key_categories(expense_categories: list[str]) -> str:
+        categories = {
+            str(category).strip().upper()
+            for category in expense_categories
+            if str(category).strip()
+        }
+        return ",".join(sorted(categories))
+
+    def _build_business_key(
+        self,
+        *,
+        employee_id: str,
+        trip_name: str,
+        destination: str,
+        trip_start_date: date,
+        trip_end_date: date,
+        expense_categories: list[str],
+    ) -> str:
+        return ExpenseClaim.build_business_key(
+            employee_id=employee_id,
+            trip_name=trip_name,
+            destination=destination,
+            trip_start_date=trip_start_date,
+            trip_end_date=trip_end_date,
+            expense_categories=expense_categories,
+        )
+
+    def _business_key_from_claim(self, claim: ExpenseClaim) -> str:
+        if claim.business_key:
+            return claim.business_key
+        return ExpenseClaim.business_key_from_claim(claim)
+
     def _calculate_line_items(
         self,
         employee: Employee,
@@ -668,6 +743,14 @@ class ExpenseClaimService(BaseService):
                 currency=currency,
             ),
             notes=request.comments,
+            business_key=self._build_business_key(
+                employee_id=employee.employee_id,
+                trip_name=request.trip_name,
+                destination=request.destination,
+                trip_start_date=request.trip_start_date,
+                trip_end_date=request.trip_end_date,
+                expense_categories=[item.category_code for item in request.expense_items],
+            ),
         )
 
         claim.submit()
@@ -704,24 +787,29 @@ class ExpenseClaimService(BaseService):
         trip_name: str,
         trip_start_date: date,
         trip_end_date: date,
+        destination: str | None = None,
+        expense_categories: list[str] | None = None,
     ) -> list[ExpenseClaim]:
-        """
-        Detect potential duplicate claims.
-        """
+        """Detect potential duplicate claims."""
         self.log_start("Detect Duplicate Claims")
 
-        # Get all claims for the employee
+        expected_business_key = self._build_business_key(
+            employee_id=employee_id,
+            trip_name=trip_name,
+            destination=destination or "",
+            trip_start_date=trip_start_date,
+            trip_end_date=trip_end_date,
+            expense_categories=expense_categories or [],
+        )
+
         employee_claims = self.list_employee_claims(employee_id)
 
-        # Filter for claims with similar trip details
         duplicates = []
         for claim in employee_claims:
-            if (
-                claim.trip_name == trip_name
-                and claim.trip_start_date == trip_start_date
-                and claim.trip_end_date == trip_end_date
-                and claim.status != ClaimStatus.REJECTED
-            ):
+            if claim.status == ClaimStatus.REJECTED:
+                continue
+            claim_business_key = self._business_key_from_claim(claim)
+            if claim_business_key == expected_business_key:
                 duplicates.append(claim)
 
         self.log_success("Detect Duplicate Claims")

@@ -10,7 +10,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from contracts import EmployeeProfile, PolicyContext
+from contracts import (
+    ApprovalResult,
+    ClaimPreview,
+    EmployeeProfile,
+    PolicyContext,
+    ReceiptResult,
+    SubmittedClaim,
+)
 from conversation.conversation_state import ConversationState
 
 
@@ -94,6 +101,53 @@ class ConversationContext:
     def record_message(self, role: str, content: str) -> None:
         self.conversation_history.append({"role": role, "content": content})
 
+    @classmethod
+    def from_snapshot(cls, snapshot: Mapping[str, Any] | None) -> ConversationContext:
+        context = cls()
+        if not snapshot:
+            return context
+
+        context.employee_id = snapshot.get("employee_id")
+        context.trip_name = snapshot.get("trip_name")
+        context.business_purpose = snapshot.get("business_purpose")
+        context.destination = snapshot.get("destination")
+        context.trip_start_date = snapshot.get("trip_start_date")
+        context.trip_end_date = snapshot.get("trip_end_date")
+        context.expense_items = []
+        expense_items = snapshot.get("expense_items")
+        if isinstance(expense_items, list):
+            for item in expense_items:
+                if isinstance(item, Mapping):
+                    context.expense_items.append(context._normalize_expense_item(item))
+        context.expense_collection_complete = bool(snapshot.get("expense_collection_complete"))
+        context.employee_profile = cls._restore_model(
+            snapshot.get("employee_profile"), EmployeeProfile
+        )
+        context.policy_context = cls._restore_model(snapshot.get("policy_context"), PolicyContext)
+        context.claim_preview = cls._restore_model(snapshot.get("claim_preview"), ClaimPreview)
+        context.confirmation = snapshot.get("confirmation")
+        context.claim_id = snapshot.get("claim_id")
+        context.draft_claim_id = snapshot.get("draft_claim_id")
+        context.receipt_uploads = cls._restore_receipt_uploads(snapshot.get("receipt_uploads"))
+        context.receipts_complete = bool(snapshot.get("receipts_complete"))
+        context.receipt_upload_paused = bool(snapshot.get("receipt_upload_paused"))
+        context.category_clarifications = cls._restore_mapping_list(
+            snapshot.get("category_clarifications")
+        )
+        context.conversation_history = cls._restore_history(snapshot.get("conversation_history"))
+        context.execution_results = cls._restore_execution_results(
+            snapshot.get("execution_results")
+        )
+
+        execution_stage = snapshot.get("execution_stage")
+        if isinstance(execution_stage, str):
+            try:
+                context.execution_stage = ConversationState(execution_stage)
+            except ValueError:
+                context.execution_stage = ConversationState.ACTIVE
+
+        return context
+
     def apply_updates(self, updates: Mapping[str, Any] | None) -> None:
         if not updates:
             return
@@ -118,6 +172,77 @@ class ConversationContext:
                 }
             else:
                 setattr(self, key, normalized)
+
+    @staticmethod
+    def _restore_model(value: Any, model_cls: type[BaseModel]) -> Any:
+        if isinstance(value, model_cls):
+            return value
+        if isinstance(value, Mapping):
+            return model_cls.model_validate(value)
+        return value
+
+    @staticmethod
+    def _restore_mapping_list(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [dict(item) for item in value if isinstance(item, Mapping)]
+
+    @classmethod
+    def _restore_history(cls, value: Any) -> list[dict[str, str]]:
+        history: list[dict[str, str]] = []
+        if not isinstance(value, list):
+            return history
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            role = item.get("role")
+            content = item.get("content")
+            if isinstance(role, str) and isinstance(content, str):
+                history.append({"role": role, "content": content})
+        return history
+
+    @classmethod
+    def _restore_receipt_uploads(cls, value: Any) -> dict[str, list[dict[str, Any]]]:
+        if not isinstance(value, Mapping):
+            return {}
+
+        uploads: dict[str, list[dict[str, Any]]] = {}
+        for category, items in value.items():
+            if not isinstance(items, list):
+                continue
+            uploads[str(category)] = [dict(item) for item in items if isinstance(item, Mapping)]
+        return uploads
+
+    @classmethod
+    def _restore_execution_results(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+
+        restored: dict[str, Any] = {}
+        for key, item in value.items():
+            restored[key] = cls._restore_execution_result(key, item)
+        return restored
+
+    @classmethod
+    def _restore_execution_result(cls, key: str, value: Any) -> Any:
+        if key == "employee_profile":
+            return cls._restore_model(value, EmployeeProfile)
+        if key in {"policy_context", "partial_policy_context"}:
+            return cls._restore_model(value, PolicyContext)
+        if key == "claim_preview":
+            return cls._restore_model(value, ClaimPreview)
+        if key == "submitted_claim":
+            return cls._restore_model(value, SubmittedClaim)
+        if key == "approval_result":
+            return cls._restore_model(value, ApprovalResult)
+        if key == "receipt_result":
+            return cls._restore_model(value, ReceiptResult)
+        if key == "last_execution" and isinstance(value, Mapping):
+            return {
+                nested_key: cls._restore_execution_result(nested_key, nested_value)
+                for nested_key, nested_value in value.items()
+            }
+        return _normalize_value(value)
 
     def infer_updates_from_message(
         self,

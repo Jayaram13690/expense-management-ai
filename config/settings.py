@@ -52,13 +52,22 @@ class DynamoDBSettings(BaseSettings):
         default="expense-ai-expense-claims",
         validation_alias="EXPENSE_CLAIMS_TABLE",
     )
+    claim_business_keys_table: str = Field(
+        default="expense-ai-claim-business-keys",
+        validation_alias="EXPENSE_CLAIM_BUSINESS_KEYS_TABLE",
+    )
     receipts_table: str = Field(
         default="expense-ai-receipts",
         validation_alias="RECEIPTS_TABLE",
     )
 
     @field_validator(
-        "employees_table", "policies_table", "categories_table", "claims_table", "receipts_table"
+        "employees_table",
+        "policies_table",
+        "categories_table",
+        "claims_table",
+        "claim_business_keys_table",
+        "receipts_table",
     )
     def validate_table_name(cls, v):
         """Validate that table names are not empty."""

@@ -100,6 +100,7 @@ class DatabaseHealthChecker:
             settings.dynamodb.categories_table,
             settings.dynamodb.policies_table,
             settings.dynamodb.claims_table,
+            settings.dynamodb.claim_business_keys_table,
             settings.dynamodb.receipts_table,
         ]
 

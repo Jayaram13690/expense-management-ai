@@ -20,6 +20,7 @@ from database.constants import (
     CATEGORY_CODE_INDEX,
     CATEGORY_GRADE_INDEX,
     CATEGORY_ID,
+    CLAIM_BUSINESS_KEY,
     CLAIM_ID,
     CLAIM_INDEX,
     CLAIM_STATUS,
@@ -296,6 +297,33 @@ def expense_claim_table_schema() -> dict[str, Any]:
     }
 
 
+def claim_business_key_table_schema() -> dict[str, Any]:
+    """
+    Claim business key lock table schema.
+    """
+
+    return {
+        "TableName": settings.dynamodb.claim_business_keys_table,
+        "BillingMode": PAY_PER_REQUEST,
+        "AttributeDefinitions": [
+            {
+                "AttributeName": CLAIM_BUSINESS_KEY,
+                "AttributeType": STRING,
+            },
+        ],
+        "KeySchema": [
+            {
+                "AttributeName": CLAIM_BUSINESS_KEY,
+                "KeyType": HASH,
+            }
+        ],
+        "SSESpecification": {
+            "Enabled": SSE_ENABLED,
+        },
+        "Tags": _default_tags(),
+    }
+
+
 def receipt_table_schema() -> dict[str, Any]:
     """
     Receipts table schema.
@@ -350,5 +378,6 @@ TABLE_SCHEMAS = (
     expense_category_table_schema,
     expense_policy_table_schema,
     expense_claim_table_schema,
+    claim_business_key_table_schema,
     receipt_table_schema,
 )

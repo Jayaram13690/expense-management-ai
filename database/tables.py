@@ -26,6 +26,11 @@ def get_expense_claims_table():
     return get_dynamodb_resource().Table(settings.dynamodb.claims_table)
 
 
+def get_claim_business_keys_table():
+
+    return get_dynamodb_resource().Table(settings.dynamodb.claim_business_keys_table)
+
+
 def get_receipts_table():
 
     return get_dynamodb_resource().Table(settings.dynamodb.receipts_table)

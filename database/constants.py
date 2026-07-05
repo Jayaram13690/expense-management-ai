@@ -111,6 +111,8 @@ CLAIM_ID = "claim_id"
 
 CLAIM_STATUS = "claim_status"
 
+CLAIM_BUSINESS_KEY = "business_key"
+
 APPROVER_ID = "approver_id"
 
 SUBMISSION_DATE = "submission_date"

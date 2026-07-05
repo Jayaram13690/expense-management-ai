@@ -6,6 +6,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from agents.receipt_agent import ReceiptAgent, ReceiptUploadError
+from config.settings import settings
 
 
 def _local_temp_dir() -> Path:
@@ -122,3 +123,54 @@ def test_upload_receipt_file_rejects_duplicate_source_path(monkeypatch):
             receipt_index=2,
             existing_uploads=[{"source_path": str(receipt_file)}],
         )
+
+
+def test_send_manager_approval_email_uses_claim_snapshot_amounts(monkeypatch):
+    receipt_agent = ReceiptAgent()
+    monkeypatch.setattr(settings.notifications, "sender_email", "sender@example.com")
+    monkeypatch.setattr(settings.notifications, "notification_email", "manager@example.com")
+
+    captured = {}
+
+    def fake_send_notification_email(**kwargs):
+        captured.update(kwargs)
+        return {"message_id": "msg-1"}
+
+    monkeypatch.setattr(
+        "agents.receipt_agent.send_notification_email", fake_send_notification_email
+    )
+
+    result = receipt_agent.send_manager_approval_email(
+        claim_id="CLM123456789012",
+        approval_result={"status": "PENDING"},
+        claim_snapshot={
+            "employee_id": "EMP0003",
+            "employee_name": "Asha Rao",
+            "department": "Engineering",
+            "destination": "Bangalore",
+            "business_purpose": "Attend customer meetings",
+            "trip_start_date": "2026-07-01",
+            "trip_end_date": "2026-07-03",
+            "amount": {
+                "claimed_amount": "2500.00",
+                "approved_amount": "2000.00",
+                "reimbursable_amount": "2000.00",
+            },
+            "expense_line_items": [
+                {
+                    "category_name": "Hotel",
+                    "claimed_amount": "1500.00",
+                    "currency": "INR",
+                }
+            ],
+        },
+        claim_preview=None,
+        policy_context={},
+        receipt_uploads={},
+    )
+
+    assert result["success"] is True
+    body = captured["body_text"]
+    assert "Claim Amount: 2500.00" in body
+    assert "Approved Amount: 2000.00" in body
+    assert "N/A" not in body

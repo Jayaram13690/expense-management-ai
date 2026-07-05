@@ -407,7 +407,7 @@ def test_employee_lookup_bypasses_orchestrator():
 def test_approval_workflow_bypasses_orchestrator():
     coordinator = _build_coordinator()
 
-    result = coordinator.route_message("Approve claim CLM1001")
+    result = coordinator.route_message("Approve the claim CLM1001")
 
     assert result["status"] == "APPROVED"
     assert coordinator.approval_agent.process_decision.call_count == 1

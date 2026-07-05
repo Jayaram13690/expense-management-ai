@@ -173,6 +173,18 @@ class ReceiptAgent(BaseAgent):
             claim_snapshot.get("employee_name") or claim_snapshot.get("employee_id") or "Unknown"
         )
         policy_summary = self._policy_summary(policy_context)
+        claim_amount = self._resolve_amount(
+            claim_snapshot,
+            claim_preview,
+            top_level_keys=("total_claimed", "claimed_amount", "total_amount"),
+            nested_keys=("claimed_amount", "total_claimed", "total_amount"),
+        )
+        approved_amount = self._resolve_amount(
+            claim_preview,
+            claim_snapshot,
+            top_level_keys=("total_approved", "approved_amount", "reimbursable_amount"),
+            nested_keys=("approved_amount", "reimbursable_amount", "total_approved"),
+        )
         body = (
             "Expense Claim Approval Required\n\n"
             f"Claim ID: {claim_id}\n"
@@ -184,8 +196,9 @@ class ReceiptAgent(BaseAgent):
             f"Trip Dates: {claim_snapshot.get('trip_start_date', 'N/A')} to "
             f"{claim_snapshot.get('trip_end_date', 'N/A')}\n"
             f"Expense Summary: {self._expense_summary(claim_snapshot)}\n"
-            f"Approved Amount: {self._lookup(claim_preview, 'total_approved', default='N/A')}\n"
-            f"Variance: {self._variance(claim_preview)}\n"
+            f"Claim Amount: {claim_amount}\n"
+            f"Approved Amount: {approved_amount}\n"
+            f"Variance: {self._variance(claim_amount, approved_amount)}\n"
             f"Policy Summary: {policy_summary}\n"
             f"Approval Status: {approval_result.get('status', 'PENDING')}\n"
         )
@@ -424,13 +437,9 @@ class ReceiptAgent(BaseAgent):
             parts.append(f"{category}: {currency} {amount}")
         return "; ".join(parts) if parts else "No expense items available"
 
-    def _variance(self, claim_preview: Mapping[str, Any] | None) -> str:
-        if not isinstance(claim_preview, Mapping):
-            return "N/A"
-        requested = self._lookup(claim_preview, "total_requested")
-        approved = self._lookup(claim_preview, "total_approved")
+    def _variance(self, claim_amount: Any, approved_amount: Any) -> str:
         try:
-            return f"{float(str(requested)) - float(str(approved)):.2f}"
+            return f"{float(str(claim_amount)) - float(str(approved_amount)):.2f}"
         except (TypeError, ValueError):
             return "N/A"
 
@@ -438,6 +447,32 @@ class ReceiptAgent(BaseAgent):
         if not isinstance(payload, Mapping):
             return default
         return payload.get(key, default)
+
+    def _resolve_amount(
+        self,
+        *payloads: Mapping[str, Any] | None,
+        top_level_keys: Sequence[str],
+        nested_keys: Sequence[str],
+    ) -> str:
+        for payload in payloads:
+            if not isinstance(payload, Mapping):
+                continue
+
+            for key in top_level_keys:
+                value = payload.get(key)
+                if value not in (None, "", [], {}):
+                    return str(value)
+
+            nested_amount = payload.get("amount")
+            if not isinstance(nested_amount, Mapping):
+                continue
+
+            for key in nested_keys:
+                value = nested_amount.get(key)
+                if value not in (None, "", [], {}):
+                    return str(value)
+
+        return "N/A"
 
     def _normalize_path(self, file_path: str) -> Path:
         normalized = file_path.strip().strip('"').strip("'")

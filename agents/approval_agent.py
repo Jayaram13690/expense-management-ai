@@ -31,7 +31,7 @@ class ApprovalAgent(BaseAgent):
     """Approval agent with deterministic orchestration helpers."""
 
     _APPROVE_PATTERN = re.compile(
-        r"^(?:approve(?:\s+claim)?\s+(CLM\d+)|approve\s+(CLM\d+)|claim\s+(CLM\d+)\s+approved)\s*$",
+        r"^(?:approve(?:\s+the)?(?:\s+claim)?\s+(CLM\d+)|approve\s+(CLM\d+)|claim\s+(CLM\d+)\s+approved)\s*$",
         re.IGNORECASE,
     )
     _REJECT_PATTERN = re.compile(

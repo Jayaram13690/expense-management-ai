@@ -33,6 +33,7 @@ Aggregate boundaries
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -179,6 +180,59 @@ class ExpenseClaim(BaseEntity):
     policy_id: PolicyId | None = None
 
     notes: str | None = None
+
+    business_key: str | None = None
+
+    @staticmethod
+    def _normalize_business_key_text(value: str) -> str:
+        return " ".join(value.strip().split()).lower()
+
+    @staticmethod
+    def _normalize_business_key_employee(value: str) -> str:
+        return " ".join(value.strip().split()).upper()
+
+    @staticmethod
+    def _normalize_business_key_categories(expense_categories: Sequence[str]) -> str:
+        categories = {
+            str(category).strip().upper()
+            for category in expense_categories
+            if str(category).strip()
+        }
+        return ",".join(sorted(categories))
+
+    @classmethod
+    def build_business_key(
+        cls,
+        *,
+        employee_id: str,
+        trip_name: str,
+        destination: str,
+        trip_start_date: date,
+        trip_end_date: date,
+        expense_categories: Sequence[str],
+    ) -> str:
+        """Return the deterministic business key for duplicate detection."""
+
+        parts = [
+            cls._normalize_business_key_employee(employee_id),
+            cls._normalize_business_key_text(trip_name),
+            cls._normalize_business_key_text(destination),
+            trip_start_date.isoformat(),
+            trip_end_date.isoformat(),
+            cls._normalize_business_key_categories(expense_categories),
+        ]
+        return "|".join(parts)
+
+    @classmethod
+    def business_key_from_claim(cls, claim: ExpenseClaim) -> str:
+        return cls.build_business_key(
+            employee_id=claim.employee_id,
+            trip_name=claim.trip_name,
+            destination=claim.destination,
+            trip_start_date=claim.trip_start_date,
+            trip_end_date=claim.trip_end_date,
+            expense_categories=[item.category_code for item in claim.expense_line_items],
+        )
 
     # --------------------------------------------------
     # Aggregate Invariants — Construction
