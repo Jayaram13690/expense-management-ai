@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import concurrent.futures
-import json
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
@@ -122,7 +121,10 @@ class SequentialExecution:
         }
 
     def _employee_prompt(self, context: ConversationContext) -> str:
-        return f"Retrieve the employee profile for employee_id {context.employee_id} using the available tools."
+        return (
+            "Retrieve the employee profile for employee_id "
+            f"{context.employee_id} using the available tools."
+        )
 
     def _expense_prompt(self, context: ConversationContext, *, action: str) -> str:
         claim = self._build_claim_request(context).model_dump(exclude_none=True)
@@ -148,6 +150,21 @@ class SequentialExecution:
         )
 
     def _build_claim_request(self, context: ConversationContext) -> SubmitExpenseClaimRequest:
+        expense_items = []
+        for item in context.expense_items:
+            if not isinstance(item, Mapping):
+                continue
+            expense_items.append(
+                {
+                    "category_code": item.get("category_code"),
+                    "description": item.get("description"),
+                    "expense_date": item.get("expense_date"),
+                    "requested_amount": item.get("requested_amount"),
+                    "currency": item.get("currency"),
+                    "receipt_available": item.get("receipt_available", False),
+                }
+            )
+
         return SubmitExpenseClaimRequest.model_validate(
             {
                 "employee_id": context.employee_id,
@@ -156,7 +173,7 @@ class SequentialExecution:
                 "destination": context.destination,
                 "trip_start_date": context.trip_start_date,
                 "trip_end_date": context.trip_end_date,
-                "expense_items": list(context.expense_items),
+                "expense_items": expense_items,
             }
         )
 
@@ -174,7 +191,7 @@ class SequentialExecution:
     def _has_only_keys(self, value: Any, allowed: set[str], *, required: set[str]) -> bool:
         if not isinstance(value, Mapping):
             return False
-        keys = {str(key) for key in value.keys()}
+        keys = {str(key) for key in value}
         return required.issubset(keys) and keys.issubset(allowed)
 
     def _extract_claim_id(self, result: Any) -> str | None:
@@ -197,49 +214,89 @@ class ParallelExecution:
         """Run eligibility and limits lookups concurrently for each category."""
 
         employee_grade = self._employee_grade(context)
+        existing_policy_context = self._existing_policy_context(context)
+        existing_categories = set(existing_policy_context.categories.keys())
         categories = self._expense_categories(context)
         if not categories:
             raise ValueError("At least one expense category is required for parallel execution")
 
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=max(1, len(categories) * 2)
-        ) as executor:
-            future_map: dict[concurrent.futures.Future[Any], tuple[str, str]] = {}
-            for category in categories:
-                future_map[
-                    executor.submit(
-                        self.policy_agent.check_employee_eligibility,
-                        category,
-                        employee_grade,
-                    )
-                ] = (category, "eligible")
-                future_map[
-                    executor.submit(
-                        self.policy_agent.get_category_limits,
-                        category,
-                        employee_grade,
-                    )
-                ] = (category, "limits")
+        categories_to_lookup = [
+            category for category in categories if category not in existing_categories
+        ]
+        category_results = self._category_payload(existing_policy_context)
+        category_errors: dict[str, list[dict[str, Any]]] = {}
 
-            category_results: dict[str, dict[str, Any]] = {}
-            for future in concurrent.futures.as_completed(future_map):
-                category, kind = future_map[future]
-                bucket = category_results.setdefault(category.upper(), {})
-                result = future.result()
-                if kind == "eligible":
-                    bucket["eligible"] = bool(result)
-                else:
-                    bucket["limits"] = self._plain_mapping(result)
+        if categories_to_lookup:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max(1, len(categories_to_lookup) * 2)
+            ) as executor:
+                future_map: dict[concurrent.futures.Future[Any], tuple[str, str]] = {}
+                for category in categories_to_lookup:
+                    future_map[
+                        executor.submit(
+                            self.policy_agent.check_employee_eligibility,
+                            category,
+                            employee_grade,
+                        )
+                    ] = (category, "eligible")
+                    future_map[
+                        executor.submit(
+                            self.policy_agent.get_category_limits,
+                            category,
+                            employee_grade,
+                        )
+                    ] = (category, "limits")
 
+                for future in concurrent.futures.as_completed(future_map):
+                    category, kind = future_map[future]
+                    bucket = category_results.setdefault(category.upper(), {})
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        category_errors.setdefault(category.upper(), []).append(
+                            self._serialize_error(exc, kind)
+                        )
+                        continue
+
+                    if kind == "eligible":
+                        bucket["eligible"] = bool(result)
+                    else:
+                        bucket["limits"] = self._plain_mapping(result)
+
+        completed_categories = {
+            category: values
+            for category, values in category_results.items()
+            if {"eligible", "limits"}.issubset(values.keys())
+        }
         policy_context = PolicyContext(
             employee_grade=employee_grade,
             categories={
                 category: PolicyCategory.model_validate(values)
-                for category, values in category_results.items()
+                for category, values in completed_categories.items()
             },
         )
+
+        category_clarifications = self._build_category_clarifications(
+            context,
+            category_results=category_results,
+            category_errors=category_errors,
+        )
+
+        if category_clarifications:
+            context.store_execution_result("partial_policy_context", policy_context)
+            return {
+                "pattern": ExecutionPattern.PARALLEL.value,
+                "stage_name": "POLICY",
+                "tasks": ["check_employee_eligibility", "get_category_limits"],
+                "results": category_results,
+                "partial_policy_context": policy_context,
+                "category_clarifications": category_clarifications,
+                "failed_categories": category_errors,
+            }
+
         context.policy_context = policy_context
         context.store_execution_result("policy_context", policy_context)
+        context.execution_results.pop("partial_policy_context", None)
 
         return {
             "pattern": ExecutionPattern.PARALLEL.value,
@@ -247,6 +304,7 @@ class ParallelExecution:
             "tasks": ["check_employee_eligibility", "get_category_limits"],
             "results": category_results,
             "policy_context": policy_context,
+            "failed_categories": category_errors,
         }
 
     def _employee_grade(self, context: ConversationContext) -> str:
@@ -268,6 +326,76 @@ class ParallelExecution:
             if isinstance(category, str) and category and category.upper() not in categories:
                 categories.append(category.upper())
         return categories
+
+    def _existing_policy_context(self, context: ConversationContext) -> PolicyContext:
+        existing = context.policy_context or context.get_execution_result("partial_policy_context")
+        if isinstance(existing, PolicyContext):
+            return existing
+        if isinstance(existing, Mapping):
+            return PolicyContext.model_validate(existing)
+        return PolicyContext(employee_grade=None, categories={})
+
+    def _category_payload(self, policy_context: PolicyContext) -> dict[str, dict[str, Any]]:
+        payload: dict[str, dict[str, Any]] = {}
+        for category, details in policy_context.categories.items():
+            detail_payload = details.model_dump() if hasattr(details, "model_dump") else details
+            if isinstance(detail_payload, Mapping):
+                payload[category] = self._plain_mapping(detail_payload)
+        return payload
+
+    def _build_category_clarifications(
+        self,
+        context: ConversationContext,
+        *,
+        category_results: Mapping[str, Mapping[str, Any]],
+        category_errors: Mapping[str, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        clarifications: list[dict[str, Any]] = []
+        failing_categories = {category for category, errors in category_errors.items() if errors}
+        failing_categories.update(
+            category
+            for category, values in category_results.items()
+            if not {"eligible", "limits"}.issubset(values.keys())
+        )
+
+        for expense_index, item in enumerate(context.expense_items):
+            if not isinstance(item, Mapping):
+                continue
+            category = (
+                item.get("category_code") or item.get("category_identifier") or item.get("category")
+            )
+            if not isinstance(category, str) or category.upper() not in failing_categories:
+                continue
+
+            errors = category_errors.get(category.upper(), [])
+            first_error = errors[0] if errors else {}
+            clarifications.append(
+                {
+                    "expense_index": expense_index,
+                    "entered_category": item.get("entered_category")
+                    or category
+                    or item.get("description")
+                    or "Unknown category",
+                    "requested_amount": item.get("requested_amount"),
+                    "currency": item.get("currency") or "INR",
+                    "description": item.get("description") or "",
+                    "reason": first_error.get(
+                        "message",
+                        f"I couldn't retrieve policy details for {category.upper()}.",
+                    ),
+                    "error_code": first_error.get("error_code"),
+                    "options": context.category_clarification_options(),
+                }
+            )
+
+        return clarifications
+
+    def _serialize_error(self, exc: Exception, stage: str) -> dict[str, Any]:
+        return {
+            "stage": stage,
+            "error_code": getattr(exc, "error_code", exc.__class__.__name__),
+            "message": getattr(exc, "message", str(exc)),
+        }
 
     def _plain_mapping(self, value: Any) -> dict[str, Any]:
         plain: dict[str, Any] = {}

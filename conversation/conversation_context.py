@@ -44,6 +44,30 @@ class ConversationContext:
     RECEIPT_DONE_COMMANDS: ClassVar[set[str]] = {"done", "finished", "no more", "submit"}
     RECEIPT_RESUME_COMMANDS: ClassVar[set[str]] = {"resume", "continue", "proceed"}
     RECEIPT_CANCEL_COMMANDS: ClassVar[set[str]] = {"cancel"}
+    CATEGORY_OPTIONS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("HOTEL", "Hotel"),
+        ("TAXI", "Taxi"),
+        ("AIR", "Air Travel"),
+        ("MEALS", "Meals & Entertainment"),
+        ("PARK", "Parking"),
+        ("FUEL", "Fuel"),
+        ("INTERNET", "Internet"),
+        ("TRAIN", "Rail Travel"),
+        ("OFFICE", "Office Supplies"),
+        ("MOBILE", "Mobile Charges"),
+    )
+    CATEGORY_ALIASES: ClassVar[dict[str, tuple[str, ...]]] = {
+        "HOTEL": ("hotel", "hotel accommodation", "lodging", "room", "stay"),
+        "TAXI": ("taxi", "cab", "ride share", "rideshare", "uber", "ola", "transfer", "ride"),
+        "AIR": ("air", "air travel", "flight", "airfare", "air ticket", "airline"),
+        "MEALS": ("meal", "meals", "meals & entertainment", "food", "lunch", "dinner", "breakfast"),
+        "PARK": ("park", "parking"),
+        "FUEL": ("fuel", "petrol", "diesel", "gas"),
+        "INTERNET": ("internet", "wifi", "wi-fi", "broadband", "data card"),
+        "TRAIN": ("train", "rail", "rail travel"),
+        "OFFICE": ("office", "office supplies", "stationery", "supplies"),
+        "MOBILE": ("mobile", "phone", "cell", "communication", "sim"),
+    }
 
     employee_id: str | None = None
     trip_name: str | None = None
@@ -62,6 +86,7 @@ class ConversationContext:
     receipt_uploads: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     receipts_complete: bool = False
     receipt_upload_paused: bool = False
+    category_clarifications: list[dict[str, Any]] = field(default_factory=list)
     conversation_history: list[dict[str, str]] = field(default_factory=list)
     execution_results: dict[str, Any] = field(default_factory=dict)
     execution_stage: ConversationState = ConversationState.ACTIVE
@@ -78,8 +103,13 @@ class ConversationContext:
                 continue
             normalized = _normalize_value(value)
             if key == "expense_items" and normalized is not None:
-                self.expense_items = list(normalized)
+                self.expense_items = []
+                if isinstance(normalized, list):
+                    for entry in normalized:
+                        if isinstance(entry, Mapping):
+                            self.expense_items.append(self._normalize_expense_item(entry))
                 self.expense_collection_complete = bool(self.expense_items)
+                self.category_clarifications = self.derive_category_clarifications()
             elif key == "receipt_uploads" and isinstance(normalized, Mapping):
                 self.receipt_uploads = {
                     str(category): [dict(item) for item in uploads if isinstance(item, Mapping)]
@@ -145,21 +175,10 @@ class ConversationContext:
         if isinstance(structured, Mapping):
             item = dict(structured)
             if item:
-                return item
+                return self._normalize_expense_item(item)
 
         lower = text.lower()
-        category_code = "MISC"
-        category_patterns = {
-            "HOTEL": ("hotel", "lodging", "room", "stay"),
-            "TAXI": ("taxi", "cab", "uber", "ola", "transfer", "ride"),
-            "MEALS": ("meal", "meals", "food", "lunch", "dinner", "breakfast"),
-            "FLIGHT": ("flight", "airfare", "air ticket", "airline"),
-            "TRAIN": ("train", "rail"),
-        }
-        for code, keywords in category_patterns.items():
-            if any(keyword in lower for keyword in keywords):
-                category_code = code
-                break
+        category_code = self.normalize_category_identifier(text)
 
         amount_match = re.search(r"(\d+(?:\.\d{1,2})?)", text)
         requested_amount = amount_match.group(1) if amount_match else "1"
@@ -178,33 +197,40 @@ class ConversationContext:
             phrase in lower for phrase in ("no receipt", "without receipt", "receipt unavailable")
         )
 
-        return {
+        item = {
             "category_code": category_code,
+            "entered_category": text,
             "description": text,
             "expense_date": expense_date,
             "requested_amount": requested_amount,
             "currency": currency,
             "receipt_available": receipt_available,
         }
+        return self._normalize_expense_item(item)
 
     def append_expense_item(self, item: Mapping[str, Any] | None) -> None:
         if not item:
             return
         normalized = _normalize_value(item)
         if isinstance(normalized, Mapping):
-            self.expense_items.append(dict(normalized))
+            self.expense_items.append(self._normalize_expense_item(normalized))
         elif isinstance(normalized, list):
             for entry in normalized:
                 if isinstance(entry, Mapping):
-                    self.expense_items.append(dict(entry))
+                    self.expense_items.append(self._normalize_expense_item(entry))
         self.expense_collection_complete = False
         self.receipts_complete = False
         self.receipt_uploads.clear()
         self.draft_claim_id = None
+        self.policy_context = None
+        self.category_clarifications = self.derive_category_clarifications()
+        self.execution_results.pop("partial_policy_context", None)
+        self.execution_results.pop("policy_context", None)
 
     def mark_expense_collection_complete(self) -> None:
         if self.expense_items:
             self.expense_collection_complete = True
+            self.category_clarifications = self.derive_category_clarifications()
 
     def set_stage(self, stage: ConversationState) -> None:
         self.execution_stage = stage
@@ -244,6 +270,79 @@ class ConversationContext:
 
     def total_uploaded_receipts(self) -> int:
         return sum(len(uploads) for uploads in self.receipt_uploads.values())
+
+    def set_category_clarifications(self, clarifications: Sequence[Mapping[str, Any]]) -> None:
+        self.category_clarifications = [dict(_normalize_value(item)) for item in clarifications]
+
+    def clear_category_clarifications(self) -> None:
+        self.category_clarifications.clear()
+
+    def has_pending_category_clarifications(self) -> bool:
+        return bool(self.category_clarifications)
+
+    def next_category_clarification(self) -> dict[str, Any] | None:
+        return self.category_clarifications[0] if self.category_clarifications else None
+
+    def apply_category_clarification(self, category_code: str) -> None:
+        clarification = self.next_category_clarification()
+        if clarification is None:
+            return
+
+        expense_index = clarification.get("expense_index")
+        if not isinstance(expense_index, int) or not (0 <= expense_index < len(self.expense_items)):
+            self.category_clarifications = self.category_clarifications[1:]
+            return
+
+        item = dict(self.expense_items[expense_index])
+        item["category_code"] = category_code
+        item["entered_category"] = item.get("entered_category") or clarification.get(
+            "entered_category"
+        )
+        item["needs_category_clarification"] = False
+        item.pop("category_identifier", None)
+        self.expense_items[expense_index] = item
+        self.category_clarifications = self.derive_category_clarifications()
+        self.policy_context = None
+        self.execution_results.pop("partial_policy_context", None)
+        self.execution_results.pop("policy_context", None)
+
+    def derive_category_clarifications(self) -> list[dict[str, Any]]:
+        clarifications: list[dict[str, Any]] = []
+        for expense_index, item in enumerate(self.expense_items):
+            if not isinstance(item, Mapping):
+                continue
+            if not item.get("needs_category_clarification"):
+                continue
+            clarifications.append(
+                {
+                    "expense_index": expense_index,
+                    "entered_category": item.get("entered_category")
+                    or item.get("category_code")
+                    or item.get("description")
+                    or "Unknown category",
+                    "requested_amount": item.get("requested_amount"),
+                    "currency": item.get("currency") or "INR",
+                    "description": item.get("description") or "",
+                    "reason": "I couldn't identify the expense category from that entry.",
+                    "options": self.category_clarification_options(),
+                }
+            )
+        return clarifications
+
+    def category_clarification_options(self) -> list[dict[str, str]]:
+        return [{"code": code, "label": label} for code, label in self.CATEGORY_OPTIONS]
+
+    def resolve_category_choice(self, message: str) -> str | None:
+        normalized = self._normalize_command(message)
+        if not normalized:
+            return None
+
+        if normalized.isdigit():
+            choice_index = int(normalized) - 1
+            if 0 <= choice_index < len(self.CATEGORY_OPTIONS):
+                return self.CATEGORY_OPTIONS[choice_index][0]
+
+        return self.normalize_category_identifier(message)
 
     def append_receipt_upload(self, category: str, metadata: Mapping[str, Any]) -> None:
         normalized_category = category.upper()
@@ -352,6 +451,7 @@ class ConversationContext:
             "receipt_uploads": _normalize_value(self.receipt_uploads),
             "receipts_complete": self.receipts_complete,
             "receipt_upload_paused": self.receipt_upload_paused,
+            "category_clarifications": _normalize_value(self.category_clarifications),
             "conversation_history": _normalize_value(self.conversation_history),
             "execution_results": _normalize_value(self.execution_results),
             "execution_stage": self.execution_stage.value,
@@ -375,6 +475,7 @@ class ConversationContext:
         self.receipt_uploads.clear()
         self.receipts_complete = False
         self.receipt_upload_paused = False
+        self.category_clarifications.clear()
         self.conversation_history.clear()
         self.execution_results.clear()
         self.execution_stage = ConversationState.ACTIVE
@@ -532,8 +633,73 @@ class ConversationContext:
 
         return parsed_value.isoformat(), None
 
+    def normalize_category_identifier(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+
+        normalized = self._normalize_command(value)
+        if not normalized:
+            return None
+
+        compact = normalized.replace(" ", "_").upper()
+        direct_codes = {code for code, _ in self.CATEGORY_OPTIONS}
+        if compact in direct_codes:
+            return compact
+
+        if normalized in {"other", "misc", "miscellaneous"}:
+            return None
+
+        for code, label in self.CATEGORY_OPTIONS:
+            label_normalized = self._normalize_command(label)
+            if normalized == label_normalized or normalized in label_normalized:
+                return code
+
+        for code, aliases in self.CATEGORY_ALIASES.items():
+            if compact == code:
+                return code
+            if any(alias in normalized for alias in aliases):
+                return code
+
+        return None
+
+    def _normalize_expense_item(self, item: Mapping[str, Any]) -> dict[str, Any]:
+        normalized_item = dict(_normalize_value(item))
+        entered_category = (
+            normalized_item.get("entered_category")
+            or normalized_item.get("category")
+            or normalized_item.get("category_identifier")
+            or normalized_item.get("category_code")
+            or normalized_item.get("description")
+        )
+        category_code = self.normalize_category_identifier(str(entered_category))
+        if category_code is None:
+            normalized_item["category_code"] = None
+            normalized_item["needs_category_clarification"] = True
+        else:
+            normalized_item["category_code"] = category_code
+            normalized_item["needs_category_clarification"] = False
+        normalized_item["entered_category"] = entered_category
+        return normalized_item
+
+    def format_expense_for_clarification(self, clarification: Mapping[str, Any]) -> str:
+        label = (
+            clarification.get("entered_category")
+            or clarification.get("description")
+            or "Unknown category"
+        )
+        amount = clarification.get("requested_amount")
+        currency = clarification.get("currency") or "INR"
+        if amount not in (None, ""):
+            return f"{label} ({currency} {amount})"
+        return str(label)
+
     def _policy_payload(self) -> Mapping[str, Any]:
-        payload = self.policy_context or self.get_execution_result("policy_context") or {}
+        payload = (
+            self.policy_context
+            or self.get_execution_result("policy_context")
+            or self.get_execution_result("partial_policy_context")
+            or {}
+        )
         if hasattr(payload, "model_dump") and callable(payload.model_dump):
             payload = payload.model_dump()
         if isinstance(payload, Mapping):

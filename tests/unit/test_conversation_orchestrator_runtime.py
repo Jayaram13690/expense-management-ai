@@ -11,6 +11,7 @@ from agents.receipt_agent import ReceiptAgent, ReceiptUploadError
 from contracts import EmployeeProfile
 from conversation.conversation_state import ConversationState
 from conversation.orchestrator import ConversationOrchestrator
+from exceptions.service import ServiceException
 
 
 def _build_orchestrator(receipt_upload_side_effect=None) -> ConversationOrchestrator:
@@ -59,15 +60,30 @@ def _employee_profile_side_effect(employee_id: str) -> EmployeeProfile:
 
 def _policy_eligibility_side_effect(category_identifier: str, employee_grade: str) -> bool:
     assert employee_grade == "G5"
-    assert category_identifier.upper() in {"HOTEL", "TAXI"}
+    assert category_identifier.upper() in {"HOTEL", "TAXI", "MEALS", "AIR"}
     return True
 
 
 def _policy_limits_side_effect(category_identifier: str, employee_grade: str) -> dict[str, object]:
     assert employee_grade == "G5"
+    category = category_identifier.upper()
+    if category == "AIR":
+        raise ServiceException(
+            message="Expense category 'AIR' needs clarification for this claim.",
+            error_code="CATEGORY_NOT_FOUND",
+        )
+    if category == "HOTEL":
+        daily_limit = "5000"
+        monthly_limit = "20000"
+    elif category == "MEALS":
+        daily_limit = "1200"
+        monthly_limit = "12000"
+    else:
+        daily_limit = "1500"
+        monthly_limit = "10000"
     return {
-        "daily_limit": "5000" if category_identifier.upper() == "HOTEL" else "1500",
-        "monthly_limit": "20000" if category_identifier.upper() == "HOTEL" else "10000",
+        "daily_limit": daily_limit,
+        "monthly_limit": monthly_limit,
         "receipt_required": True,
         "approval_required": False,
     }
@@ -151,8 +167,10 @@ def _start_receipt_flow(orchestrator: ConversationOrchestrator) -> None:
         extracted_data=_claim_data(),
     )
     assert preview_result["state"] == ConversationState.WAITING_USER.value
+    assert preview_result["conversation_stage"] == "waiting_confirmation"
     receipt_prompt = orchestrator.process_turn("YES")
     assert receipt_prompt["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert receipt_prompt["conversation_stage"] == "waiting_receipts"
 
 
 def test_receipt_collection_blocks_submission_until_all_receipts_uploaded():
@@ -162,6 +180,7 @@ def test_receipt_collection_blocks_submission_until_all_receipts_uploaded():
 
     hotel_result = orchestrator.process_turn(r"C:\Receipts\hotel.jpg")
     assert hotel_result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert hotel_result["conversation_stage"] == "waiting_receipts"
     assert "TAXI receipt" in hotel_result["assistant_message"]
     assert orchestrator.expense_agent.submit_claim_request.call_count == 0
 
@@ -180,6 +199,7 @@ def test_invalid_receipt_path_keeps_receipt_collection_active():
     result = orchestrator.process_turn(r"C:\Receipts\missing.jpg")
 
     assert result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert result["conversation_stage"] == "waiting_receipts"
     assert "valid local file path" in result["assistant_message"]
     assert orchestrator.expense_agent.submit_claim_request.call_count == 0
     assert orchestrator.context.receipt_uploads == {}
@@ -192,6 +212,7 @@ def test_unsupported_receipt_extension_keeps_same_slot_active():
     result = orchestrator.process_turn(r"C:\Receipts\notes.txt")
 
     assert result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert result["conversation_stage"] == "waiting_receipts"
     assert "unsupported receipt file type" in result["assistant_message"].lower()
     assert "HOTEL receipt" in result["assistant_message"]
     assert orchestrator.expense_agent.submit_claim_request.call_count == 0
@@ -205,6 +226,7 @@ def test_duplicate_receipt_upload_is_rejected_without_losing_existing_uploads():
     result = orchestrator.process_turn(r"C:\Receipts\duplicate.jpg")
 
     assert result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert result["conversation_stage"] == "waiting_receipts"
     assert "already been uploaded" in result["assistant_message"].lower()
     assert len(orchestrator.context.receipt_uploads["HOTEL"]) == 1
     assert "TAXI" not in orchestrator.context.receipt_uploads
@@ -216,10 +238,12 @@ def test_receipt_upload_can_be_cancelled_and_resumed():
     _start_receipt_flow(orchestrator)
     cancel_result = orchestrator.process_turn("CANCEL")
     assert cancel_result["state"] == ConversationState.WAITING_USER.value
+    assert cancel_result["conversation_stage"] == "waiting_receipts"
     assert orchestrator.expense_agent.submit_claim_request.call_count == 0
 
     resume_result = orchestrator.process_turn("RESUME")
     assert resume_result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert resume_result["conversation_stage"] == "waiting_receipts"
     assert "HOTEL receipt" in resume_result["assistant_message"]
 
 
@@ -230,6 +254,7 @@ def test_done_before_all_receipts_uploaded_keeps_receipt_collection_active():
     result = orchestrator.process_turn("DONE")
 
     assert result["state"] == ConversationState.COLLECTING_RECEIPTS.value
+    assert result["conversation_stage"] == "waiting_receipts"
     assert "Receipts are still required" in result["assistant_message"]
     assert orchestrator.expense_agent.submit_claim_request.call_count == 0
 
@@ -245,3 +270,73 @@ def test_successful_receipt_collection_submits_claim_and_generates_acknowledgeme
     assert "Claim submitted successfully" in result["assistant_message"]
     assert orchestrator.approval_agent.get_approval_result.call_count == 1
     assert orchestrator.receipt_agent.generate_receipt_result.call_count == 1
+
+
+def test_unknown_expense_category_requests_clarification_without_crashing():
+    orchestrator = _build_orchestrator()
+
+    result = orchestrator.process_turn(
+        "I want to submit an expense claim.",
+        extracted_data={
+            **_claim_data(),
+            "expense_items": [
+                {
+                    "category_code": "SNACKS",
+                    "description": "Snacks for client meeting",
+                    "expense_date": "2026-07-02",
+                    "requested_amount": "4000",
+                    "currency": "INR",
+                    "receipt_available": False,
+                }
+            ],
+        },
+    )
+
+    assert result["state"] == ConversationState.WAITING_USER.value
+    assert result["conversation_stage"] == "waiting_category_clarification"
+    assert "Please choose one of the following categories" in result["assistant_message"]
+    assert orchestrator.employee_agent.get_employee_profile.call_count == 0
+
+    clarified = orchestrator.process_turn("4")
+
+    assert clarified["state"] == ConversationState.WAITING_USER.value
+    assert clarified["conversation_stage"] == "waiting_confirmation"
+    assert orchestrator.employee_agent.get_employee_profile.call_count == 1
+    assert orchestrator.context.expense_items[0]["category_code"] == "MEALS"
+
+
+def test_parallel_policy_failure_isolated_to_failed_category():
+    orchestrator = _build_orchestrator()
+
+    result = orchestrator.process_turn(
+        "I want to submit an expense claim.",
+        extracted_data={
+            **_claim_data(),
+            "expense_items": [
+                {
+                    "category_code": "HOTEL",
+                    "description": "Hotel stay",
+                    "expense_date": "2026-07-01",
+                    "requested_amount": "5800",
+                    "currency": "INR",
+                    "receipt_available": False,
+                },
+                {
+                    "category_code": "AIR",
+                    "description": "Air ticket",
+                    "expense_date": "2026-07-01",
+                    "requested_amount": "18000",
+                    "currency": "INR",
+                    "receipt_available": False,
+                },
+            ],
+        },
+    )
+
+    assert result["state"] == ConversationState.WAITING_USER.value
+    assert result["conversation_stage"] == "waiting_category_clarification"
+    assert "Air ticket" in result["assistant_message"] or "AIR" in result["assistant_message"]
+    partial_policy = orchestrator.context.get_execution_result("partial_policy_context")
+    assert partial_policy is not None
+    assert "HOTEL" in partial_policy.categories
+    assert "AIR" not in partial_policy.categories

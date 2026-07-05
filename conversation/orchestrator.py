@@ -86,6 +86,12 @@ class ConversationOrchestrator:
         if self.context.execution_stage == ConversationState.COLLECTING_RECEIPTS:
             return self._handle_receipt_collection_turn(message)
 
+        if (
+            self.context.execution_stage == ConversationState.WAITING_USER
+            and self.context.has_pending_category_clarifications()
+        ):
+            return self._handle_category_clarification_turn(message)
+
         confirmation = self._hil.interpret(message)
         if confirmation is not None and self.context.claim_preview is not None:
             self.context.confirmation = confirmation
@@ -101,6 +107,9 @@ class ConversationOrchestrator:
 
         if self.context.missing_fields(self.REQUIRED_FIELDS) and self.context.confirmation is None:
             return self._prompt_for_information()
+
+        if self._needs_category_clarification():
+            return self._prompt_for_category_clarification()
 
         if self._needs_receipt_collection():
             return self._route_to_receipt_collection(message)
@@ -241,6 +250,7 @@ class ConversationOrchestrator:
                 self.context.append_expense_item(item)
 
         self.context.set_stage(ConversationState.COLLECTING_EXPENSES)
+        self.context.category_clarifications = self.context.derive_category_clarifications()
         prompt = self._expense_follow_up_prompt()
         self.context.record_message("assistant", prompt)
         return self._build_stage_response(
@@ -260,6 +270,65 @@ class ConversationOrchestrator:
         if updates:
             self.context.apply_updates(updates)
         return self._continue_execution()
+
+    def _needs_category_clarification(self) -> bool:
+        if self.context.has_pending_category_clarifications():
+            return True
+        clarifications = self.context.derive_category_clarifications()
+        if clarifications:
+            self.context.set_category_clarifications(clarifications)
+            return True
+        return False
+
+    def _handle_category_clarification_turn(self, message: str) -> dict[str, Any]:
+        category_code = self.context.resolve_category_choice(message)
+        if category_code is None:
+            prompt = (
+                "Please choose one of the listed categories so I can continue."
+                f"{self._category_clarification_prompt()}"
+            )
+            self.context.set_stage(ConversationState.WAITING_USER)
+            self.context.record_message("assistant", prompt)
+            return self._build_stage_response(
+                assistant_message=prompt,
+                stage=ConversationState.WAITING_USER,
+                next_action="category_clarification",
+                metadata={"stage": "WAITING_CATEGORY_CLARIFICATION"},
+            )
+
+        self.context.apply_category_clarification(category_code)
+        if self._needs_category_clarification():
+            return self._prompt_for_category_clarification()
+
+        return self._continue_execution()
+
+    def _prompt_for_category_clarification(self) -> dict[str, Any]:
+        prompt = self._category_clarification_prompt()
+        self.context.set_stage(ConversationState.WAITING_USER)
+        self.context.record_message("assistant", prompt)
+        return self._build_stage_response(
+            assistant_message=prompt,
+            stage=ConversationState.WAITING_USER,
+            next_action="category_clarification",
+            metadata={"stage": "WAITING_CATEGORY_CLARIFICATION"},
+        )
+
+    def _category_clarification_prompt(self) -> str:
+        clarification = self.context.next_category_clarification()
+        if clarification is None:
+            return "I need a bit more detail about one of your expense categories."
+
+        expense_summary = self.context.format_expense_for_clarification(clarification)
+        reason = clarification.get("reason")
+        lines = ["I couldn't identify the category for:", "", expense_summary]
+        if isinstance(reason, str) and reason.strip():
+            lines.extend(["", reason.strip()])
+        lines.extend(["", "Please choose one of the following categories:", ""])
+        lines.extend(
+            f"{index}. {option['label']}"
+            for index, option in enumerate(self.context.category_clarification_options(), start=1)
+        )
+        return "\n".join(lines)
 
     def _route_to_receipt_collection(self, message: str) -> dict[str, Any]:
         if self.context.is_receipt_cancel_message(message):
@@ -294,7 +363,7 @@ class ConversationOrchestrator:
             stage=ConversationState.COLLECTING_RECEIPTS,
             next_action="collect_receipts",
             metadata={
-                "stage": "COLLECTING_RECEIPTS",
+                "stage": "WAITING_RECEIPTS",
                 "required_categories": self.context.required_receipt_categories(),
             },
         )
@@ -397,7 +466,7 @@ class ConversationOrchestrator:
             assistant_message=prompt,
             stage=ConversationState.WAITING_USER,
             next_action="collect_receipts",
-            metadata={"stage": "COLLECTING_RECEIPTS", "paused": True},
+            metadata={"stage": "WAITING_RECEIPTS", "paused": True},
         )
 
     def _continue_execution(self, prefix_message: str | None = None) -> dict[str, Any]:
@@ -414,9 +483,17 @@ class ConversationOrchestrator:
                     return self._prompt_for_information(plan.prompt)
                 if plan.next_action == "collect_expenses":
                     return self._start_expense_collection(plan.prompt)
+                if self._needs_category_clarification():
+                    return self._prompt_for_category_clarification()
                 if plan.next_action == "await_confirmation":
                     assistant_message = self._hil.build_prompt(self.context)
                     self.context.set_stage(ConversationState.WAITING_USER)
+                    plan = ExecutionPlan(
+                        pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
+                        next_action="await_confirmation",
+                        prompt=assistant_message,
+                        metadata={"stage": "WAITING_CONFIRMATION"},
+                    )
                     break
                 if plan.next_action == "complete":
                     assistant_message = self._completion_message()
@@ -429,33 +506,49 @@ class ConversationOrchestrator:
                 break
 
             if plan.pattern == ExecutionPattern.SEQUENTIAL:
-                if plan.next_action == "employee_profile":
-                    execution_result = self._sequential.execute_employee(self.context)
-                elif plan.next_action == "expense_preview":
-                    execution_result = self._sequential.execute_expense_preview(self.context)
-                    assistant_message = self._preview_message(execution_result)
-                    self.context.set_stage(ConversationState.WAITING_USER)
-                    break
-                elif plan.next_action == "expense_submission":
-                    execution_result = self._sequential.execute_expense_submission(self.context)
-                elif plan.next_action == "approval":
-                    execution_result = self._sequential.execute_approval(self.context)
-                elif plan.next_action == "receipt":
-                    execution_result = self._sequential.execute_receipt(self.context)
-                    assistant_message = self._completion_message()
-                    self.context.set_stage(ConversationState.COMPLETED)
-                    break
-                else:
-                    assistant_message = plan.prompt or "I need a bit more information to continue."
-                    self.context.set_stage(ConversationState.WAITING_USER)
-                    break
+                try:
+                    if plan.next_action == "employee_profile":
+                        execution_result = self._sequential.execute_employee(self.context)
+                    elif plan.next_action == "expense_preview":
+                        execution_result = self._sequential.execute_expense_preview(self.context)
+                        assistant_message = self._preview_message(execution_result)
+                        self.context.set_stage(ConversationState.WAITING_USER)
+                        plan = ExecutionPlan(
+                            pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
+                            next_action="await_confirmation",
+                            prompt=assistant_message,
+                            metadata={"stage": "WAITING_CONFIRMATION"},
+                        )
+                        break
+                    elif plan.next_action == "expense_submission":
+                        execution_result = self._sequential.execute_expense_submission(self.context)
+                    elif plan.next_action == "approval":
+                        execution_result = self._sequential.execute_approval(self.context)
+                    elif plan.next_action == "receipt":
+                        execution_result = self._sequential.execute_receipt(self.context)
+                        assistant_message = self._completion_message()
+                        self.context.set_stage(ConversationState.COMPLETED)
+                        break
+                    else:
+                        assistant_message = (
+                            plan.prompt or "I need a bit more information to continue."
+                        )
+                        self.context.set_stage(ConversationState.WAITING_USER)
+                        break
+                except Exception as exc:
+                    return self._handle_execution_exception(exc)
 
                 self._record_execution(execution_result)
                 continue
 
             if plan.pattern == ExecutionPattern.PARALLEL:
-                execution_result = self._parallel.execute(self.context)
+                try:
+                    execution_result = self._parallel.execute(self.context)
+                except Exception as exc:
+                    return self._handle_execution_exception(exc)
                 self._record_execution(execution_result)
+                if self._needs_category_clarification():
+                    return self._prompt_for_category_clarification()
                 continue
 
             assistant_message = plan.prompt or "I need a bit more information to continue."
@@ -505,7 +598,10 @@ class ConversationOrchestrator:
             assistant_message=prompt,
             stage=ConversationState.WAITING_USER,
             next_action="collect_information",
-            metadata={"missing_fields": self.context.missing_fields(self.REQUIRED_FIELDS)},
+            metadata={
+                "stage": "COLLECTING_INFORMATION",
+                "missing_fields": self.context.missing_fields(self.REQUIRED_FIELDS),
+            },
         )
 
     def _missing_field_prompt(self) -> str:
@@ -544,6 +640,17 @@ class ConversationOrchestrator:
         if isinstance(policy_context, PolicyContext):
             self.context.policy_context = policy_context
             self.context.store_execution_result("policy_context", policy_context)
+            self.context.execution_results.pop("partial_policy_context", None)
+            self.context.clear_category_clarifications()
+
+        partial_policy_context = execution_result.get("partial_policy_context")
+        if isinstance(partial_policy_context, PolicyContext):
+            self.context.policy_context = None
+            self.context.store_execution_result("partial_policy_context", partial_policy_context)
+
+        category_clarifications = execution_result.get("category_clarifications")
+        if isinstance(category_clarifications, list):
+            self.context.set_category_clarifications(category_clarifications)
 
         claim_preview = execution_result.get("claim_preview")
         if claim_preview is not None:
@@ -717,10 +824,55 @@ class ConversationOrchestrator:
         return {
             "assistant_message": assistant_message,
             "state": self.context.execution_stage.value,
+            "conversation_stage": self._response_state(plan),
             "plan": plan.to_dict(),
             "context": self.context.snapshot(),
             "execution_result": execution_result,
         }
+
+    def _handle_execution_exception(self, exc: Exception) -> dict[str, Any]:
+        if self._needs_category_clarification():
+            return self._prompt_for_category_clarification()
+
+        assistant_message = (
+            "I couldn't continue with that expense entry yet. "
+            "Please review the claim details and try again."
+        )
+        self.context.set_stage(ConversationState.WAITING_USER)
+        self.context.record_message("assistant", assistant_message)
+        return self._build_stage_response(
+            assistant_message=assistant_message,
+            stage=ConversationState.WAITING_USER,
+            next_action="collect_information",
+            metadata={
+                "stage": "COLLECTING_INFORMATION",
+                "error": str(exc),
+            },
+        )
+
+    def _response_state(self, plan: ExecutionPlan) -> str:
+        if self.context.execution_stage == ConversationState.COMPLETED:
+            return ConversationState.COMPLETED.value
+        if self.context.execution_stage == ConversationState.CANCELLED:
+            return ConversationState.CANCELLED.value
+        if self.context.execution_stage == ConversationState.EXECUTING:
+            return ConversationState.EXECUTING.value
+        if self.context.execution_stage == ConversationState.COLLECTING_EXPENSES:
+            return ConversationState.COLLECTING_EXPENSES.value
+        if self.context.execution_stage == ConversationState.COLLECTING_RECEIPTS:
+            return "waiting_receipts"
+        if self.context.has_pending_category_clarifications():
+            return "waiting_category_clarification"
+        if self.context.receipt_upload_paused and self._has_pending_receipt_collection():
+            return "waiting_receipts"
+        if self.context.claim_preview is not None and self.context.confirmation is None:
+            return "waiting_confirmation"
+        if self.context.missing_fields(self.REQUIRED_FIELDS):
+            return "collecting_information"
+        stage = plan.metadata.get("stage") if isinstance(plan.metadata, Mapping) else None
+        if isinstance(stage, str):
+            return stage.lower()
+        return self.context.execution_stage.value
 
 
 __all__ = ["ConversationOrchestrator"]
