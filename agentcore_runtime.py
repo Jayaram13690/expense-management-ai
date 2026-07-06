@@ -90,8 +90,24 @@ async def invoke(payload: Any) -> dict[str, Any]:
         message=message,
         extracted_data=extracted_data,
     )
+    if isinstance(response, str):
+        return {"assistant_message": response}
 
-    return response
+    #
+    # If ConversationRuntime returned a dict
+    #
+    if isinstance(response, dict):
+        return {
+            "assistant_message": response.get(
+                "assistant_message",
+                str(response),
+            )
+        }
+
+    #
+    # Fallback
+    #
+    return {"assistant_message": str(response)}
 
 
 if __name__ == "__main__":
