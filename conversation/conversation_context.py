@@ -549,12 +549,13 @@ class ConversationContext:
         categories = [category.upper()] if category else list(self.receipt_uploads.keys())
         for receipt_category in categories:
             for upload in self.receipt_uploads.get(receipt_category, []):
-                source_path = upload.get("source_path")
-                if (
-                    isinstance(source_path, str)
-                    and source_path.strip().casefold() == normalized_path
-                ):
-                    return True
+                for source_field in ("source_path", "source_url"):
+                    source_value = upload.get(source_field)
+                    if (
+                        isinstance(source_value, str)
+                        and source_value.strip().casefold() == normalized_path
+                    ):
+                        return True
         return False
 
     def snapshot(self) -> dict[str, Any]:

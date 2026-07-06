@@ -138,6 +138,7 @@ class ReceiptUploadSettings(BaseSettings):
     max_file_size_mb: int = 10
     upload_retry_count: int = 1
     upload_timeout_seconds: int = 30
+    download_timeout_seconds: int = 30
 
     @field_validator("s3_bucket")
     def validate_bucket_name(cls, v: str) -> str:
@@ -145,7 +146,7 @@ class ReceiptUploadSettings(BaseSettings):
             raise ValueError("S3 bucket name cannot be empty")
         return v
 
-    @field_validator("max_file_size_mb", "upload_timeout_seconds")
+    @field_validator("max_file_size_mb", "upload_timeout_seconds", "download_timeout_seconds")
     def validate_positive_int(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("Value must be greater than 0")
@@ -163,8 +164,8 @@ class ReceiptUploadSettings(BaseSettings):
 class NotificationSettings(BaseSettings):
     """Notification configuration for manager and employee emails."""
 
-    notification_email: str = Field(default="", validation_alias="NOTIFICATION_EMAIL")
-    sender_email: str = Field(default="", validation_alias="NOTIFICATION_SENDER_EMAIL")
+    notification_email: str = "bjayaram189@gmail.com"
+    sender_email: str = "bjayaram189@gmail.com"
     email_retry_count: int = 1
     email_timeout_seconds: int = 30
 

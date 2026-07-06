@@ -19,6 +19,8 @@ tests/.tmp
 
 .pre-commit-config.yaml
 
+.bedrock_agentcore.yaml
+
 .python-version
 pyproject.toml
 uv.lock

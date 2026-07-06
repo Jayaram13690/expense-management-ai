@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import requests
 from botocore.exceptions import ClientError
 
 from agents.receipt_agent import ReceiptAgent, ReceiptUploadError
@@ -174,3 +175,96 @@ def test_send_manager_approval_email_uses_claim_snapshot_amounts(monkeypatch):
     assert "Claim Amount: 2500.00" in body
     assert "Approved Amount: 2000.00" in body
     assert "N/A" not in body
+
+
+class _FakeResponse:
+    def __init__(self, *, body: bytes, content_type: str, status_code: int = 200, url: str) -> None:
+        self._body = body
+        self.status_code = status_code
+        self.url = url
+        self.headers = {"Content-Type": content_type}
+
+    def iter_content(self, chunk_size: int = 8192):
+        yield self._body
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise requests.HTTPError(response=self)
+
+
+def test_upload_receipt_file_accepts_remote_url_and_cleans_up_temp_file(monkeypatch):
+    receipt_agent = ReceiptAgent()
+    url = (
+        "https://receiptsmaker.com/_next/image?url="
+        "https:%2F%2Fimages.receiptsmaker.com%2Freceipt-templates%2Fhyatt-hotel-receipt.png"
+        "&w=3840&q=75"
+    )
+    calls: list[dict[str, str]] = []
+
+    def fake_upload_receipt(**kwargs):
+        calls.append(kwargs)
+        return {
+            "bucket": kwargs["bucket"],
+            "key": kwargs["key"],
+            "content_type": kwargs["content_type"],
+            "file_name": Path(kwargs["file_path"]).name,
+        }
+
+    monkeypatch.setattr("agents.receipt_agent.upload_receipt", fake_upload_receipt)
+    monkeypatch.setattr(
+        "agents.receipt_agent.requests.get",
+        lambda *_, **__: _FakeResponse(
+            body=b"downloaded-receipt",
+            content_type="image/png",
+            url=url,
+        ),
+    )
+
+    result = receipt_agent.upload_receipt_file(
+        file_path=url,
+        claim_id="CLM-1001",
+        category="HOTEL",
+        receipt_index=1,
+    )
+
+    assert result["uploaded"] is True
+    assert result["source_url"] == url
+    assert result["content_type"] == "image/png"
+    assert result["file_name"] == "hyatt-hotel-receipt.png"
+    assert result["key"] == "claims/CLM-1001/HOTEL/receipt_1.png"
+    assert calls
+    assert not Path(calls[0]["file_path"]).exists()
+
+
+def test_upload_receipt_file_rejects_invalid_remote_url(monkeypatch):
+    receipt_agent = ReceiptAgent()
+    monkeypatch.setattr("agents.receipt_agent.upload_receipt", lambda **_: None)
+
+    with pytest.raises(ReceiptUploadError, match="provided receipt URL is invalid"):
+        receipt_agent.upload_receipt_file(
+            file_path="ftp://example.com/receipt.jpg",
+            claim_id="CLM-1001",
+            category="HOTEL",
+            receipt_index=1,
+        )
+
+
+def test_upload_receipt_file_rejects_missing_remote_file(monkeypatch):
+    receipt_agent = ReceiptAgent()
+    url = "https://example.com/receipt.jpg"
+
+    monkeypatch.setattr("agents.receipt_agent.upload_receipt", lambda **_: None)
+    monkeypatch.setattr(
+        "agents.receipt_agent.requests.get",
+        lambda *_, **__: _FakeResponse(
+            body=b"", content_type="image/jpeg", status_code=404, url=url
+        ),
+    )
+
+    with pytest.raises(ReceiptUploadError, match="remote file does not exist"):
+        receipt_agent.upload_receipt_file(
+            file_path=url,
+            claim_id="CLM-1001",
+            category="HOTEL",
+            receipt_index=1,
+        )

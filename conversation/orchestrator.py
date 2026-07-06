@@ -813,7 +813,7 @@ class ConversationOrchestrator:
 
     def _receipt_prompt_for_slot(self, slot: Mapping[str, Any]) -> str:
         category = str(slot.get("category", "receipt")).upper()
-        return f"Please provide the local file path for the {category} receipt."
+        return f"Please provide the local file path or receipt URL for the {category} receipt."
 
     def _build_stage_response(
         self,

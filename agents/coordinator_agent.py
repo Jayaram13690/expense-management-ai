@@ -73,6 +73,12 @@ class CoordinatorAgent(BaseAgent):
         message: str,
         extracted_data: Mapping[str, Any] | None = None,
     ) -> Any:
+
+        print("\nCoordinator State")
+        print(self.conversation_orchestrator.state)
+        print(self._has_active_conversation())
+        print("===================================================")
+
         if self._has_active_conversation():
             return self.conversation_orchestrator.process_turn(
                 message, extracted_data=extracted_data

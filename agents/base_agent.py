@@ -126,19 +126,33 @@ class BaseAgent:
         self._logger.debug("Invoking agent '%s'.", self.agent_name)
         self._logger.debug("Prompt:\n%s", prompt)
 
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-
-        result = loop.run_until_complete(
-            self.invoke_async(
-                prompt,
-                structured_output_model=structured_output_model,
-                **kwargs,
+            result = loop.run_until_complete(
+                self.invoke_async(
+                    prompt,
+                    structured_output_model=structured_output_model,
+                    **kwargs,
+                )
             )
-        )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+        # try:
+        #     loop = asyncio.get_event_loop()
+        # except RuntimeError:
+        #     loop = asyncio.new_event_loop()
+        #     asyncio.set_event_loop(loop)
+
+        # result = loop.run_until_complete(
+        #     self.invoke_async(
+        #         prompt,
+        #         structured_output_model=structured_output_model,
+        #         **kwargs,
+        #     )
+        # )
 
         self._logger.debug("Agent invocation completed.")
 

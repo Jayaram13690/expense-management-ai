@@ -7,11 +7,16 @@ is responsible for generating business documents from expense claims.
 
 from __future__ import annotations
 
+import logging
 import mimetypes
+import tempfile
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
+import requests
 from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
 from agents.base_agent import BaseAgent
@@ -28,6 +33,20 @@ from tools.receipt_tools import (
     send_notification_email,
     upload_receipt,
 )
+
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _PreparedReceiptSource:
+    """Resolved receipt source for upload validation and cleanup."""
+
+    path: Path
+    file_name: str
+    content_type: str
+    source_path: str
+    source_url: str | None = None
+    cleanup_required: bool = False
 
 
 class ReceiptUploadError(Exception):
@@ -76,7 +95,7 @@ class ReceiptAgent(BaseAgent):
         receipt_index: int,
         existing_uploads: list[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Validate and upload a receipt file for orchestration."""
+        """Validate and upload a receipt file or URL for orchestration."""
 
         if not claim_id or not claim_id.strip():
             raise ReceiptUploadError(
@@ -91,56 +110,50 @@ class ReceiptAgent(BaseAgent):
                 "Receipt upload is unavailable because the receipt index is invalid."
             )
 
-        normalized_path = self._normalize_path(file_path)
-        self._validate_file(normalized_path, category, existing_uploads or [])
-
-        extension = normalized_path.suffix.lower()
-        content_type = (
-            self.CONTENT_TYPE_OVERRIDES.get(extension)
-            or mimetypes.guess_type(normalized_path.name)[0]
-        )
-        if not content_type:
-            raise ReceiptUploadError(
-                f"I couldn't determine the file type for the {category.upper()} receipt. "
-                "Please upload a JPG, JPEG, PNG, or PDF file."
-            )
-
+        source = self._resolve_receipt_source(file_path, category, existing_uploads or [])
+        extension = source.path.suffix.lower()
         bucket = settings.receipt_upload.s3_bucket
         object_key = f"claims/{claim_id}/{category.upper()}/receipt_{receipt_index}{extension}"
 
         attempts = settings.receipt_upload.upload_retry_count + 1
-        for attempt in range(attempts):
-            try:
-                result = upload_receipt(
-                    file_path=str(normalized_path),
-                    bucket=bucket,
-                    key=object_key,
-                    content_type=content_type,
-                )
-                metadata = self._plain_mapping(result)
-                metadata.update(
-                    {
-                        "uploaded": True,
-                        "bucket": bucket,
-                        "key": object_key,
-                        "content_type": content_type,
-                        "file_name": normalized_path.name,
-                        "source_path": str(normalized_path),
-                        "size_bytes": normalized_path.stat().st_size,
-                    }
-                )
-                return metadata
-            except KeyboardInterrupt as exc:
-                raise ReceiptUploadError(
-                    "Receipt upload was interrupted. Please try uploading the same receipt again."
-                ) from exc
-            except (NoCredentialsError, ClientError, BotoCoreError, OSError, TimeoutError):
-                if attempt < attempts - 1:
-                    continue
+        try:
+            for attempt in range(attempts):
+                try:
+                    result = upload_receipt(
+                        file_path=str(source.path),
+                        bucket=bucket,
+                        key=object_key,
+                        content_type=source.content_type,
+                    )
+                    metadata = self._plain_mapping(result)
+                    metadata.update(
+                        {
+                            "uploaded": True,
+                            "bucket": bucket,
+                            "key": object_key,
+                            "content_type": source.content_type,
+                            "file_name": source.file_name,
+                            "source_path": source.source_path,
+                            "size_bytes": source.path.stat().st_size,
+                        }
+                    )
+                    if source.source_url:
+                        metadata["source_url"] = source.source_url
+                    return metadata
+                except KeyboardInterrupt as exc:
+                    raise ReceiptUploadError(
+                        "Receipt upload was interrupted,Please try uploading the same receipt again"
+                    ) from exc
+                except (NoCredentialsError, ClientError, BotoCoreError, OSError, TimeoutError):
+                    if attempt < attempts - 1:
+                        continue
 
-        raise ReceiptUploadError(
-            "I couldn't upload the receipt due to an AWS error. Please try again."
-        )
+            raise ReceiptUploadError(
+                "I couldn't upload the receipt due to an AWS error. Please try again."
+            )
+        finally:
+            if source.cleanup_required:
+                self._cleanup_temporary_file(source.path)
 
     def send_manager_approval_email(
         self,
@@ -475,16 +488,170 @@ class ReceiptAgent(BaseAgent):
         return "N/A"
 
     def _normalize_path(self, file_path: str) -> Path:
-        normalized = file_path.strip().strip('"').strip("'")
+        normalized = self._normalize_source_value(file_path)
         if not normalized:
             raise ReceiptUploadError("Please provide a local file path for the receipt.")
         return Path(normalized).expanduser()
+
+    def _normalize_source_value(self, value: str) -> str:
+        return value.strip().strip('"').strip("'")
+
+    def _is_url(self, value: str) -> bool:
+        parsed = urlparse(value.strip())
+        return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+    def _allowed_content_types(self) -> set[str]:
+        return set(self.CONTENT_TYPE_OVERRIDES.values())
+
+    def _extension_from_content_type(self, content_type: str) -> str | None:
+        normalized = content_type.split(";", 1)[0].strip().lower()
+        for extension, mapped_content_type in self.CONTENT_TYPE_OVERRIDES.items():
+            if mapped_content_type == normalized:
+                return extension
+        guessed = mimetypes.guess_extension(normalized)
+        if guessed == ".jpe":
+            return ".jpg"
+        return guessed
+
+    def _resolve_content_type(self, content_type: str | None, source_url: str) -> str:
+        if content_type:
+            normalized = content_type.split(";", 1)[0].strip().lower()
+            if normalized in self._allowed_content_types():
+                return normalized
+
+        candidates = [source_url]
+        parsed = urlparse(source_url)
+        query_url = parse_qs(parsed.query).get("url")
+        if query_url:
+            nested_url = unquote(query_url[0])
+            if nested_url:
+                candidates.insert(0, nested_url)
+
+        for candidate in candidates:
+            guessed, _ = mimetypes.guess_type(urlparse(candidate).path or candidate)
+            if guessed:
+                normalized_guess = guessed.split(";", 1)[0].strip().lower()
+                if normalized_guess in self._allowed_content_types():
+                    return normalized_guess
+
+        return (content_type or "").split(";", 1)[0].strip().lower()
+
+    def _infer_remote_filename(
+        self,
+        url: str,
+        response: Any,
+        extension: str,
+    ) -> str:
+        candidates: list[str] = []
+        parsed = urlparse(url)
+        query_url = parse_qs(parsed.query).get("url")
+        if query_url:
+            nested_url = unquote(query_url[0])
+            if nested_url:
+                candidates.append(nested_url)
+        response_url = getattr(response, "url", None)
+        if isinstance(response_url, str) and response_url:
+            candidates.append(response_url)
+        candidates.append(url)
+
+        for candidate in candidates:
+            candidate_name = Path(urlparse(candidate).path).name
+            if candidate_name:
+                return self._ensure_extension(candidate_name, extension)
+
+        return f"receipt{extension}"
+
+    def _ensure_extension(self, file_name: str, extension: str) -> str:
+        if Path(file_name).suffix:
+            return file_name
+        return f"{file_name}{extension}"
+
+    def _download_remote_receipt(self, url: str) -> _PreparedReceiptSource:
+        normalized_url = self._normalize_source_value(url)
+        if not self._is_url(normalized_url):
+            raise ReceiptUploadError("The provided receipt URL is invalid.")
+
+        timeout_seconds = settings.receipt_upload.download_timeout_seconds
+        temp_path: Path | None = None
+        try:
+            LOGGER.debug("Downloading remote receipt from %s", normalized_url)
+            response = requests.get(normalized_url, stream=True, timeout=timeout_seconds)
+            if response.status_code == 404:
+                raise ReceiptUploadError(
+                    "The receipt could not be downloaded due the remote file does not exist."
+                )
+            response.raise_for_status()
+
+            content_type = self._resolve_content_type(
+                response.headers.get("Content-Type"),
+                normalized_url,
+            )
+            if content_type not in self._allowed_content_types():
+                raise ReceiptUploadError("The downloaded receipt must be JPG, JPEG, PNG, or PDF.")
+
+            extension = self._extension_from_content_type(content_type)
+            if extension is None:
+                raise ReceiptUploadError("The downloaded receipt must be JPG, JPEG, PNG, or PDF.")
+
+            bytes_written = 0
+            with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as temp_file:
+                temp_path = Path(temp_file.name)
+                for chunk in response.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    temp_file.write(chunk)
+                    bytes_written += len(chunk)
+
+            if bytes_written <= 0:
+                self._cleanup_temporary_file(temp_path)
+                raise ReceiptUploadError("The downloaded receipt is empty. Please try again.")
+
+            return _PreparedReceiptSource(
+                path=temp_path,
+                file_name=self._infer_remote_filename(normalized_url, response, extension),
+                content_type=content_type,
+                source_path=normalized_url,
+                source_url=normalized_url,
+                cleanup_required=True,
+            )
+        except requests.Timeout as exc:
+            if temp_path is not None:
+                self._cleanup_temporary_file(temp_path)
+            raise ReceiptUploadError("The receipt download timed out. Please try again.") from exc
+        except ReceiptUploadError:
+            if temp_path is not None:
+                self._cleanup_temporary_file(temp_path)
+            raise
+        except requests.RequestException as exc:
+            if temp_path is not None:
+                self._cleanup_temporary_file(temp_path)
+            error_message = "Unable to download the receipt from the provided URL."
+            if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+                error_message = (
+                    "The receipt could not be downloaded because the remote file does not exist"
+                )
+            raise ReceiptUploadError(error_message) from exc
+        except OSError as exc:
+            if temp_path is not None:
+                self._cleanup_temporary_file(temp_path)
+            raise ReceiptUploadError(
+                "Unable to download the receipt from the provided URL."
+            ) from exc
+
+    def _cleanup_temporary_file(self, temp_path: Path) -> None:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            LOGGER.debug("Unable to remove temporary receipt file: %s", temp_path, exc_info=True)
 
     def _validate_file(
         self,
         file_path: Path,
         category: str,
         existing_uploads: list[Mapping[str, Any]],
+        *,
+        source_url: str | None = None,
+        source_label: str | None = None,
     ) -> None:
         if file_path.suffix.lower() not in self.ALLOWED_EXTENSIONS:
             raise ReceiptUploadError(
@@ -492,31 +659,39 @@ class ReceiptAgent(BaseAgent):
             )
         if not file_path.exists():
             raise ReceiptUploadError(
-                f"I couldn't find the file '{file_path}'. "
+                f"I couldn't find the file '{source_label or file_path}'. "
                 f"Please provide a valid local file path for the {category.upper()} receipt."
             )
         if not file_path.is_file():
             raise ReceiptUploadError(
-                f"'{file_path}' is not a file. "
+                f"'{source_label or file_path}' is not a file. "
                 f"Please provide a valid local file path for the {category.upper()} receipt."
             )
-        if any(
-            str(upload.get("source_path", "")).casefold() == str(file_path).casefold()
-            for upload in existing_uploads
-        ):
-            raise ReceiptUploadError(
-                f"That file has already been uploaded for the {category.upper()} receipt. "
-                "Please provide a different file."
-            )
+        normalized_source = str(file_path).casefold()
+        duplicate_candidates = {normalized_source}
+        if source_url:
+            duplicate_candidates.add(source_url.strip().casefold())
+        for upload in existing_uploads:
+            for source_field in ("source_path", "source_url"):
+                source_value = upload.get(source_field)
+                if (
+                    isinstance(source_value, str)
+                    and source_value.strip().casefold() in duplicate_candidates
+                ):
+                    raise ReceiptUploadError(
+                        f"That file has already been uploaded for the {category.upper()} receipt. "
+                        "Please provide a different file."
+                    )
         file_size = file_path.stat().st_size
         if file_size <= 0:
             raise ReceiptUploadError(
-                f"The file '{file_path.name}' is empty. Please upload a non-empty receipt file."
+                f"The file '{source_label or file_path.name}' is empty."
+                "Please upload a non-empty receipt file."
             )
         max_size_bytes = settings.receipt_upload.max_file_size_mb * 1024 * 1024
         if file_size > max_size_bytes:
             raise ReceiptUploadError(
-                f"The file '{file_path.name}' exceeds the "
+                f"The file '{source_label or file_path.name}' exceeds the "
                 f"{settings.receipt_upload.max_file_size_mb} MB limit. "
                 "Please upload a smaller receipt file."
             )
@@ -525,8 +700,50 @@ class ReceiptAgent(BaseAgent):
                 receipt_file.read(1)
         except OSError as exc:
             raise ReceiptUploadError(
-                f"I couldn't read '{file_path}'. Please check the file permissions and try again."
+                f"I couldn't read '{source_label or file_path}'."
+                "Please check the file permissions and try again."
             ) from exc
+
+    def _resolve_receipt_source(
+        self,
+        file_path: str,
+        category: str,
+        existing_uploads: list[Mapping[str, Any]],
+    ) -> _PreparedReceiptSource:
+        normalized_value = self._normalize_source_value(file_path)
+        if not normalized_value:
+            raise ReceiptUploadError("Please provide a local file path or receipt URL.")
+        if "://" in normalized_value and not self._is_url(normalized_value):
+            raise ReceiptUploadError("The provided receipt URL is invalid.")
+        if self._is_url(normalized_value):
+            source = self._download_remote_receipt(normalized_value)
+            self._validate_file(
+                source.path,
+                category,
+                existing_uploads,
+                source_url=source.source_url,
+                source_label=source.file_name,
+            )
+            return source
+
+        local_path = Path(normalized_value).expanduser()
+        self._validate_file(local_path, category, existing_uploads)
+        extension = local_path.suffix.lower()
+        content_type = (
+            self.CONTENT_TYPE_OVERRIDES.get(extension) or mimetypes.guess_type(local_path.name)[0]
+        )
+        if not content_type:
+            raise ReceiptUploadError(
+                f"I couldn't determine the file type for the {category.upper()} receipt. "
+                "Please upload a JPG, JPEG, PNG, or PDF file."
+            )
+        return _PreparedReceiptSource(
+            path=local_path,
+            file_name=local_path.name,
+            content_type=content_type,
+            source_path=str(local_path),
+            cleanup_required=False,
+        )
 
     def _plain_mapping(self, value: Any) -> dict[str, Any]:
         if hasattr(value, "model_dump") and callable(value.model_dump):

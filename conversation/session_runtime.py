@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from agents.approval_agent import ApprovalAgent
 from agents.coordinator_agent import CoordinatorAgent
@@ -31,14 +32,32 @@ class ConversationRuntime:
         message: str,
         extracted_data: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        snapshot = self.repository.load(session_id) if session_id else None
+
+        print("=" * 80)
+        print("SESSION ID:", session_id)
+        print("USER MESSAGE:", message)
+        if not session_id:
+            session_id = str(uuid4())
+
+        snapshot = self.repository.load(session_id)
+
+        print("\nSNAPSHOT FROM DYNAMODB:")
+        print(snapshot)
+
         context = (
             ConversationContext.from_snapshot(snapshot)
             if snapshot is not None
             else ConversationContext()
         )
+
+        print("\nSTATE BEFORE ROUTING:")
+        print(context.execution_stage)
         coordinator = self.coordinator_factory(context)
         response = coordinator.route_message(message, extracted_data=extracted_data)
+
+        print("\nSTATE AFTER ROUTING:")
+        print(context.execution_stage)
+        print("=" * 80)
 
         if context.execution_stage in {
             ConversationState.COMPLETED,
@@ -47,6 +66,9 @@ class ConversationRuntime:
             self.repository.delete(session_id)
         else:
             self.repository.save(session_id, context.snapshot())
+
+        if isinstance(response, dict):
+            response.setdefault("session_id", session_id)
 
         return response
 
