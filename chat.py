@@ -7,9 +7,7 @@ from botocore.exceptions import ClientError
 
 REGION = "us-east-1"
 
-RUNTIME_ARN = (
-    "arn:aws:bedrock-agentcore:us-east-1:042989515908:runtime/expensemanagementai-ftUjYU5lAr"
-)
+RUNTIME_ARN = "hdh"
 
 client = boto3.client(
     "bedrock-agentcore",
