@@ -166,6 +166,31 @@ class ConversationOrchestrator:
             if normalized_value is not None:
                 updates[current_field] = normalized_value
 
+        if "employee_id" in updates:
+            employee_id = updates["employee_id"]
+            if employee_id:
+                try:
+                    from services.employee_service import EmployeeService
+
+                    employee_service = EmployeeService()
+                    employee = employee_service.try_get_employee(employee_id)
+                    if employee is None:
+                        self.context.employee_id = None
+                        self.context.employee_profile = None
+                        return (
+                            {},
+                            f'I couldn\'t find employee ID "{employee_id}".'
+                            "Please enter a valid employee ID.",
+                        )
+                except Exception:
+                    self.context.employee_id = None
+                    self.context.employee_profile = None
+                    return (
+                        {},
+                        f'I couldn\'t find employee ID "{employee_id}".\n\n'
+                        "Please enter a valid employee ID.\n\nExample:\nEMP0007",
+                    )
+
         return self._validate_trip_date_updates(updates)
 
     def _validate_trip_date_updates(

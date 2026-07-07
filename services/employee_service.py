@@ -55,6 +55,28 @@ class EmployeeService(BaseService):
 
         return employee
 
+    def try_get_employee(
+        self,
+        employee_id: EmployeeId,
+    ) -> Employee | None:
+        """
+        Safely retrieve an employee. Returns None if not found.
+        """
+        self.log_start("Try Get Employee")
+
+        employee = self.employee_repository.get_by_employee_id(employee_id)
+
+        if employee is None:
+            self.log_failure(
+                "Try Get Employee",
+                f"Employee '{employee_id}' does not exist.",
+            )
+            return None
+
+        self.log_success("Try Get Employee")
+
+        return employee
+
     def get_employee_by_email(
         self,
         email: str,
