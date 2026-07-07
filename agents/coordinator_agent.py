@@ -26,6 +26,10 @@ class CoordinatorAgent(BaseAgent):
         "RECEIPT_QUERY",
         "GREETING",
         "OUTOFSCOPE",
+        "LIST_EMPLOYEE_CLAIMS",
+        "LIST_PENDING_APPROVALS",
+        "LIST_PENDING_CLAIMS",
+        "GENERATE_CLAIM_SUMMARY",
     }
     _NOTIFICATION_RETRY_COMMANDS = {"retry", "resend", "continue"}
 
@@ -108,6 +112,12 @@ class CoordinatorAgent(BaseAgent):
         if intent == "APPROVAL_QUERY":
             return self._route_approval_message(message)
         if intent == "RECEIPT_QUERY":
+            return self.receipt_agent.invoke(message)
+        if intent == "LIST_EMPLOYEE_CLAIMS":
+            return self.employee_agent.invoke(message)
+        if intent == "LIST_PENDING_APPROVALS":
+            return self.approval_agent.invoke(message)
+        if intent == "GENERATE_CLAIM_SUMMARY":
             return self.receipt_agent.invoke(message)
         if intent == "GREETING":
             return self._clarification_response(message)
@@ -347,8 +357,19 @@ class CoordinatorAgent(BaseAgent):
             "Return a JSON object with keys intent and confidence.\n"
             "Return exactly one intent from:\n"
             "SUBMIT_EXPENSE_CLAIM, CHECK_CLAIM_STATUS, POLICY_QUERY, EMPLOYEE_QUERY,\n"
-            "APPROVAL_QUERY, RECEIPT_QUERY, GREETING, OUTOFSCOPE.\n"
-            "Do not answer the user's question. Do not perform business reasoning."
+            "APPROVAL_QUERY, RECEIPT_QUERY, LIST_EMPLOYEE_CLAIMS, LIST_PENDING_APPROVALS,\n"
+            "GREETING, OUTOFSCOPE.\n"
+            "Do not answer the user's question. Do not perform business reasoning.\n\n"
+            """Intent definitions and examples:\n
+            - LIST_EMPLOYEE_CLAIMS: User wants to retrieve a list or 
+            history of expense claims belonging to an employee.\n
+            Examples: 'Show my claims', 'List my claims', 'Expense history', 'Claims of EMP0007',
+            'Previous claims', 'Travel claims', 'Employee expense history'.\n
+            Do NOT classify these as EMPLOYEE_QUERY.\n"""
+            """- LIST_PENDING_APPROVALS: Manager wants to retrieve claims awaiting approval.\n
+            - Examples: 'Pending approvals', 'Approval queue', 'Pending claims', 
+            'Claims waiting approval', 'Requests awaiting approval', 'Show manager approval queue'.
+            Do NOT classify these as APPROVAL_QUERY."""
         )
 
     def _classification_prompt(self, message: str) -> str:
