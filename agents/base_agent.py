@@ -23,6 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from strands import Agent as StrandsAgent
+from strands import ModelRetryStrategy
 from strands.models import BedrockModel
 
 from config.settings import settings
@@ -98,6 +99,11 @@ class BaseAgent:
             tools=tools,
             name=name,
             description=description,
+            retry_strategy=ModelRetryStrategy(
+                max_attempts=3,  # Total attempts (including first try)
+                initial_delay=2,  # Seconds before first retry
+                max_delay=60,
+            ),
         )
 
         self._logger.info("BaseAgent initialized successfully.")

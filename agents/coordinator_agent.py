@@ -375,7 +375,7 @@ class CoordinatorAgent(BaseAgent):
     def _classification_prompt(self, message: str) -> str:
         return (
             "Classify the user's intent from the message below.\n"
-            "Return a JSON object with keys intent and confidence.\n\n"
+            "DReturn a JSON object with keys intent and confidence.\n\n"
             f"Message: {message}"
         )
 
@@ -441,8 +441,10 @@ class CoordinatorAgent(BaseAgent):
                 • Manager approvals
 
         Keep the response under 40 words.
+        
             User:
             {message}
+        DO NOT RETURN INTENT WITH CONDIFIDENCE FOR GENERAL CHAT.
         """
         return self.invoke(prompt)
         # return {
