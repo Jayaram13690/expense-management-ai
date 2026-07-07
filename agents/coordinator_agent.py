@@ -24,7 +24,8 @@ class CoordinatorAgent(BaseAgent):
         "EMPLOYEE_QUERY",
         "APPROVAL_QUERY",
         "RECEIPT_QUERY",
-        "UNKNOWN",
+        "GREETING",
+        "OUTOFSCOPE",
     }
     _NOTIFICATION_RETRY_COMMANDS = {"retry", "resend", "continue"}
 
@@ -108,8 +109,11 @@ class CoordinatorAgent(BaseAgent):
             return self._route_approval_message(message)
         if intent == "RECEIPT_QUERY":
             return self.receipt_agent.invoke(message)
-
-        return self._clarification_response()
+        if intent == "GREETING":
+            return self._clarification_response(message)
+        if intent == "OUTOFSCOPE":
+            return self._clarification_response(message)
+        return self._clarification_response(message)
 
     def classify_intent(self, message: str) -> str:
         prompt = self._classification_prompt(message)
@@ -343,7 +347,7 @@ class CoordinatorAgent(BaseAgent):
             "Return a JSON object with keys intent and confidence.\n"
             "Return exactly one intent from:\n"
             "SUBMIT_EXPENSE_CLAIM, CHECK_CLAIM_STATUS, POLICY_QUERY, EMPLOYEE_QUERY,\n"
-            "APPROVAL_QUERY, RECEIPT_QUERY, UNKNOWN.\n"
+            "APPROVAL_QUERY, RECEIPT_QUERY, GREETING, OUTOFSCOPE.\n"
             "Do not answer the user's question. Do not perform business reasoning."
         )
 
@@ -398,14 +402,35 @@ class CoordinatorAgent(BaseAgent):
                     return value
         return str(response)
 
-    def _clarification_response(self) -> dict[str, str]:
-        return {
-            "intent": "UNKNOWN",
-            "response": (
-                "I can help with submitting expense claims, claim status, policy questions, "
-                "employee details, approvals, and receipt summaries. What would you like to do?"
-            ),
-        }
+    def _clarification_response(self, message: str) -> str:
+        prompt = f"""
+        You are the Travel Expense Claim Management Assistant.
+        If the user greets you:
+            - respond warmly
+            - introduce yourself
+            - explain briefly what you can help with
+        If the user asks something unrelated to expense management:
+            Politely explain that your expertise is limited to travel expense management.
+            Mention you can help with:
+                • Submit expense claims
+                • Claim status
+                • Travel policy
+                • Employee details
+                • Receipt upload
+                • Manager approvals
+
+        Keep the response under 40 words.
+            User:
+            {message}
+        """
+        return self.invoke(prompt)
+        # return {
+        #     "intent": "UNKNOWN",
+        #     "response": (
+        #         "I can help with submitting expense claims, claim status, policy questions, "
+        #         "employee details, approvals, and receipt summaries. What would you like to do?"
+        #     ),
+        # }
 
 
 __all__ = ["CoordinatorAgent"]
