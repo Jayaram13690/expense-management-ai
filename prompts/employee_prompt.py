@@ -63,4 +63,12 @@ If the required information to invoke a tool is missing:
 Example:
 Missing employee_id → ask for employee ID.
 User query with name -> ask for employee ID.
+
+RULES:
+- Do NOT ask follow-up questions unless additional information is required.
+- Do NOT append conversational phrases like:
+    - "Would you like to know more?"
+    - "Is there anything else I can help with?"
+    - "Would you like additional details?"
+    - "Let me know if..."
 """

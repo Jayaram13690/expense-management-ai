@@ -85,6 +85,9 @@ class BaseAgent:
             resolved_model = BedrockModel(
                 model_id=settings.aws.bedrock_model_id,
                 region_name=settings.aws.aws_region,
+                temperature=0.1,
+                top_p=0.9,
+                max_tokens=450,
             )
 
         else:
