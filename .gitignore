@@ -26,3 +26,5 @@ pyproject.toml
 uv.lock
 
 .ruff_cache
+
+*.zip
