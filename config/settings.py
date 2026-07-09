@@ -21,6 +21,8 @@ class AWSSettings(BaseSettings):
 
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "global.amazon.nova-2-lite-v1:0"
+    bedrock_guardrail_id: str = "zby817atuj97"
+    bedrock_guardrail_version: str = "3"
 
     model_config = SettingsConfigDict(env_prefix="AWS_", extra="forbid")
 

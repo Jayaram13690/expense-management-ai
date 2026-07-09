@@ -88,10 +88,25 @@ class BaseAgent:
                 temperature=0.1,
                 top_p=0.9,
                 max_tokens=450,
+                guardrail_id=settings.aws.bedrock_guardrail_id,
+                guardrail_version=settings.aws.bedrock_guardrail_version,
+                # Recommended options
+                guardrail_trace="enabled",
+                guardrail_redact_input=True,
+                guardrail_redact_output=True,
+                guardrail_latest_message=True,
             )
 
         else:
             self._logger.info("Using injected model for agent '%s'.", name)
+
+        # Evaluate tools if provided
+        wrapped_tools = tools
+        if tools:
+            from evaluation.tool_evaluator import ToolEvaluator
+
+            evaluator = ToolEvaluator()
+            wrapped_tools = [evaluator.evaluate_tool_call(t) for t in tools]
 
         #
         # Create Strands Agent
@@ -99,7 +114,7 @@ class BaseAgent:
         self._agent = StrandsAgent(
             model=resolved_model,
             system_prompt=system_prompt,
-            tools=tools,
+            tools=wrapped_tools,
             name=name,
             description=description,
             retry_strategy=ModelRetryStrategy(
