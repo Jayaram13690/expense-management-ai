@@ -100,21 +100,13 @@ class BaseAgent:
         else:
             self._logger.info("Using injected model for agent '%s'.", name)
 
-        # Evaluate tools if provided
-        wrapped_tools = tools
-        if tools:
-            from evaluation.tool_evaluator import ToolEvaluator
-
-            evaluator = ToolEvaluator()
-            wrapped_tools = [evaluator.evaluate_tool_call(t) for t in tools]
-
         #
         # Create Strands Agent
         #
         self._agent = StrandsAgent(
             model=resolved_model,
             system_prompt=system_prompt,
-            tools=wrapped_tools,
+            tools=tools,
             name=name,
             description=description,
             retry_strategy=ModelRetryStrategy(
