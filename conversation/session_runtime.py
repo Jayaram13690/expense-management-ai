@@ -15,6 +15,7 @@ from conversation.context_repository import ConversationContextRepository
 from conversation.conversation_context import ConversationContext
 from conversation.conversation_state import ConversationState
 from conversation.orchestrator import ConversationOrchestrator
+from evaluation.output_evaluator import OutputEvaluator
 
 CoordinatorFactory = Callable[[ConversationContext], CoordinatorAgent]
 
@@ -25,6 +26,11 @@ class ConversationRuntime:
 
     repository: ConversationContextRepository
     coordinator_factory: CoordinatorFactory
+    evaluator: OutputEvaluator = None
+
+    def __post_init__(self):
+        if self.evaluator is None:
+            self.evaluator = OutputEvaluator()
 
     def process_request(
         self,
@@ -73,7 +79,7 @@ class ConversationRuntime:
         if isinstance(response, dict):
             response.setdefault("session_id", session_id)
 
-        return response
+        return self.evaluator.evaluate(response)
 
 
 def build_default_runtime(
