@@ -877,6 +877,20 @@ class ConversationOrchestrator:
             "execution_result": execution_result,
         }
 
+    # Travel validation error codes that terminate a submission flow.
+    # Kept in sync with conversation/execution_patterns.py intentionally:
+    # the orchestrator needs them to format a clean user-facing message.
+    _TRAVEL_VALIDATION_CODES: frozenset[str] = frozenset(
+        {
+            "FUTURE_TRIP",
+            "ONGOING_TRIP",
+            "SUBMISSION_WINDOW_EXPIRED",
+            "OVERLAPPING_TRIP",
+            "EXISTING_DRAFT",
+            "EXPENSE_DATE_OUT_OF_RANGE",
+        }
+    )
+
     def _handle_execution_result_failure(
         self,
         execution_result: Mapping[str, Any],
@@ -895,6 +909,23 @@ class ConversationOrchestrator:
                 "is a new claim.\n"
                 "If you want to review the existing claim instead, ask me for its status."
             )
+            conversation_completed = True
+        elif error_code in self._TRAVEL_VALIDATION_CODES:
+            # Strip the raw "[ERROR_CODE] " prefix that ApplicationException
+            # prepends to str(exc) so the CLI shows the clean policy message.
+            clean_message = assistant_message
+            if clean_message.startswith(f"[{error_code}]"):
+                clean_message = clean_message[len(f"[{error_code}]") :].lstrip()
+            if error_code == "EXISTING_DRAFT":
+                assistant_message = (
+                    f"{clean_message}\n\n"
+                    "Would you like to continue with the existing draft, "
+                    "or start a completely new claim?"
+                )
+            else:
+                assistant_message = (
+                    f"{clean_message}\n\nYou may start a new claim whenever you are ready."
+                )
             conversation_completed = True
         elif not recoverable:
             conversation_completed = True

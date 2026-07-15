@@ -15,6 +15,25 @@ from conversation.conversation_context import ConversationContext
 from conversation.execution_plan import ExecutionPattern
 from models.dto.submit_claim import SubmitExpenseClaimRequest
 
+# Travel validation error codes that are terminal for the current submission
+# flow.  When one of these fires the collected trip data is fundamentally
+# wrong (wrong dates, expired window, overlap) — there is nothing the user
+# can "correct" in the next message without starting from scratch.  Setting
+# recoverable=False on these codes causes the orchestrator to call
+# reset_submission_flow() and return to ACTIVE state immediately.
+#
+# EXISTING_DRAFT is the single exception: it is recoverable=True because the
+# user should be redirected to the existing draft, not blocked entirely.
+_TRAVEL_VALIDATION_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "FUTURE_TRIP",
+        "ONGOING_TRIP",
+        "SUBMISSION_WINDOW_EXPIRED",
+        "OVERLAPPING_TRIP",
+        "EXPENSE_DATE_OUT_OF_RANGE",
+    }
+)
+
 
 class SequentialExecution:
     """Execute one business stage at a time."""
@@ -73,11 +92,16 @@ class SequentialExecution:
                 )
             )
         except Exception as exc:
+            error_code = getattr(exc, "error_code", exc.__class__.__name__.upper())
+            # Travel validation failures are terminal for this submission:
+            # the collected trip data itself is invalid.  Mark not recoverable
+            # so the orchestrator resets the flow and returns to ACTIVE state.
+            recoverable = error_code not in _TRAVEL_VALIDATION_ERROR_CODES
             return self._error_result(
                 stage_name="PREVIEW",
-                error_code=getattr(exc, "error_code", exc.__class__.__name__.upper()),
+                error_code=error_code,
                 assistant_message=str(exc),
-                recoverable=True,
+                recoverable=recoverable,
             )
 
         context.claim_preview = claim_preview
@@ -102,11 +126,15 @@ class SequentialExecution:
                 )
             )
         except Exception as exc:
+            error_code = getattr(exc, "error_code", exc.__class__.__name__.upper())
+            # Same logic as execute_expense_preview: travel validation errors
+            # are not recoverable within the current submission flow.
+            recoverable = error_code not in _TRAVEL_VALIDATION_ERROR_CODES
             return self._error_result(
                 stage_name="SUBMISSION",
-                error_code=getattr(exc, "error_code", exc.__class__.__name__.upper()),
+                error_code=error_code,
                 assistant_message=str(exc),
-                recoverable=True,
+                recoverable=recoverable,
             )
 
         context.store_execution_result("submitted_claim", submitted_claim)
