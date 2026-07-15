@@ -38,6 +38,31 @@ from cli.theme import THEME
 
 _T = THEME  # shorthand
 
+# ─── Travel validation error codes ────────────────────────────────────────────
+
+# These match the error_code values set by TravelValidationService.
+# The orchestrator prepends the clean message with these codes stripped,
+# but we detect them via sentinel phrases that survive that stripping.
+_TRAVEL_VALIDATION_SENTINEL: dict[str, tuple[str, str]] = {
+    "FUTURE_TRIP": ("⏳", "Future Trip"),
+    "ONGOING_TRIP": ("✈", "Ongoing Trip"),
+    "SUBMISSION_WINDOW_EXPIRED": ("📅", "Submission Window Expired"),
+    "OVERLAPPING_TRIP": ("🔁", "Overlapping Trip Detected"),
+    "EXISTING_DRAFT": ("📋", "Existing Draft Found"),
+    "EXPENSE_DATE_OUT_OF_RANGE": ("📆", "Expense Date Out of Range"),
+}
+
+# Phrases that uniquely identify each travel validation message after the
+# [ERROR_CODE] prefix has been stripped by the orchestrator.
+_TRAVEL_VALIDATION_PHRASES: list[tuple[str, str]] = [
+    ("cannot be submitted before travel begins", "FUTURE_TRIP"),
+    ("trip is still in progress", "ONGOING_TRIP"),
+    ("company policy requires travel expense claims", "SUBMISSION_WINDOW_EXPIRED"),
+    ("travel expense claim already exists", "OVERLAPPING_TRIP"),
+    ("existing draft claim was found", "EXISTING_DRAFT"),
+    ("falls outside the travel period", "EXPENSE_DATE_OUT_OF_RANGE"),
+]
+
 
 # ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -299,6 +324,159 @@ def render_claim_summary(message: str) -> None:
     )
 
 
+def _detect_travel_validation_code(message: str) -> str | None:
+    """
+    Return the travel validation error code if the message matches one
+    of the sentinel phrases, or None if it is a regular response.
+    """
+    lower = message.lower()
+    for phrase, code in _TRAVEL_VALIDATION_PHRASES:
+        if phrase in lower:
+            return code
+    return None
+
+
+# Key → label mapping for the structured date lines in travel validation errors.
+# These labels appear in the SUBMISSION_WINDOW_EXPIRED message body.
+_DATE_LINE_LABELS: dict[str, str] = {
+    "travel end date": "Travel End Date",
+    "submission deadline": "Submission Deadline",
+    "current date": "Current Date",
+    "trip start": "Trip Start",
+    "trip end": "Trip End",
+    "expense date": "Expense Date",
+    "existing claim": "Existing Claim ID",
+}
+
+
+def _parse_travel_date_lines(text: str) -> list[tuple[str, str]]:
+    """
+    Extract 'Label: value' pairs from travel validation messages so they
+    can be rendered as a tidy Rich table instead of raw inline text.
+    """
+    rows: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if ":" not in stripped:
+            continue
+        key_raw, _, val = stripped.partition(":")
+        key_lower = key_raw.strip().lower()
+        for match_key, label in _DATE_LINE_LABELS.items():
+            if match_key in key_lower:
+                rows.append((label, val.strip()))
+                break
+    return rows
+
+
+def render_travel_validation_error(message: str) -> None:
+    """
+    Render a travel validation error as a structured, visually distinct
+    panel in the CLI.
+
+    Layout
+    ──────
+    ┌─ ⚠ Travel Validation ────────────────────────────────────────┐
+    │  ⏳ Submission Window Expired                                 │
+    │  ─────────────────────────────────────────────────────────── │
+    │  <policy paragraph lines>                                     │
+    │  ─────────────────────────────────────────────────────────── │
+    │  Travel End Date    │  2026-07-03                            │
+    │  Submission Deadline│  2026-07-10                            │
+    │  Current Date       │  2026-07-15                            │
+    │  ─────────────────────────────────────────────────────────── │
+    │  ➜  You may start a new claim whenever you are ready.        │
+    └──────────────────────────────────────────────────────────────┘
+    """
+    from rich.console import Group
+
+    code = _detect_travel_validation_code(message)
+    icon, label = (
+        _TRAVEL_VALIDATION_SENTINEL.get(code, ("⚠", "Travel Validation"))
+        if code
+        else ("⚠", "Travel Validation")
+    )
+
+    # Amber/orange — visually different from error (red) and normal (cyan).
+    border_colour = "yellow"
+    header_colour = "bold yellow"
+    label_colour = f"bold {_T.palette.text_primary}"
+    muted_colour = _T.palette.muted
+
+    sections: list[Any] = []
+
+    # ── Header row: icon + sub-label ─────────────────────────────────────────
+    header_text = Text()
+    header_text.append(f"{icon}  ", style=header_colour)
+    header_text.append(label, style=header_colour)
+    sections.append(header_text)
+    sections.append(Rule(style=border_colour))
+
+    # ── Split message into policy prose vs. structured date lines ─────────────
+    # The CTA footer added by the orchestrator starts with "You may" or
+    # "Would you like"; we separate it out so it renders distinctly.
+    cta_line = ""
+    prose_lines: list[str] = []
+    date_rows: list[tuple[str, str]] = []
+
+    for raw_line in message.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        # CTA footer detection
+        if stripped.lower().startswith(("you may", "would you like")):
+            cta_line = stripped
+            continue
+        # Structured key:value date lines
+        matched = False
+        if ":" in stripped:
+            key_raw = stripped.split(":", 1)[0].strip().lower()
+            for match_key in _DATE_LINE_LABELS:
+                if match_key in key_raw:
+                    val = stripped.split(":", 1)[1].strip()
+                    label_str = _DATE_LINE_LABELS[match_key]
+                    date_rows.append((label_str, val))
+                    matched = True
+                    break
+        if not matched:
+            prose_lines.append(stripped)
+
+    # ── Policy prose ─────────────────────────────────────────────────────────
+    if prose_lines:
+        prose = Text()
+        prose.append("\n".join(prose_lines), style=_T.palette.text_secondary)
+        sections.append(prose)
+
+    # ── Date / detail table ──────────────────────────────────────────────────
+    if date_rows:
+        sections.append(Rule(style=border_colour))
+        dt = Table(box=None, show_header=False, padding=(0, 2))
+        dt.add_column("Label", style=f"bold {_T.palette.brand_secondary}", width=24)
+        dt.add_column("Value", style=label_colour)
+        for k, v in date_rows:
+            dt.add_row(k, v)
+        sections.append(dt)
+
+    # ── CTA footer ───────────────────────────────────────────────────────────
+    if cta_line:
+        sections.append(Rule(style=border_colour))
+        cta = Text()
+        cta.append(f"{_T.icons.arrow}  ", style=f"bold {border_colour}")
+        cta.append(cta_line, style=muted_colour)
+        sections.append(cta)
+
+    console.print(
+        Panel(
+            Group(*sections),
+            title=f"[bold {border_colour}]{_T.icons.warning}  Travel Validation[/]",
+            title_align="left",
+            border_style=border_colour,
+            box=box.ROUNDED,
+            padding=(1, 3),
+            expand=True,
+        )
+    )
+
+
 # ─── Response renderer ────────────────────────────────────────────────────────
 
 
@@ -306,11 +484,17 @@ def render_response(message: str) -> None:
     """
     Render the assistant's response.
 
-    If the message is detected as a Claim Summary it is routed to the
-    dedicated structured renderer; otherwise it falls back to Markdown.
+    Routing order:
+      1. Claim Summary  → structured totals/warnings/policy panel
+      2. Travel validation error → structured amber warning panel
+      3. Everything else → Markdown inside a standard Assistant panel
     """
     if _is_claim_summary(message):
         render_claim_summary(message)
+        return
+
+    if _detect_travel_validation_code(message):
+        render_travel_validation_error(message)
         return
 
     title = f"[{_T.palette.brand_primary}]Assistant[/]"
