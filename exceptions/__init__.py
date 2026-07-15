@@ -9,12 +9,14 @@ from exceptions.database import DatabaseException
 from exceptions.repository import RepositoryException
 from exceptions.service import ServiceException
 from exceptions.tools import ToolException
+from exceptions.travel_validation import TravelValidationException
 from exceptions.validation import ValidationException
 from exceptions.workflow import WorkflowException
 
 __all__ = [
     "ApplicationException",
     "ValidationException",
+    "TravelValidationException",
     "RepositoryException",
     "DatabaseException",
     "ServiceException",
