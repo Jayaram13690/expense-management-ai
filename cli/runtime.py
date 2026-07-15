@@ -18,19 +18,30 @@ Rules:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError, EndpointResolutionError
+from dotenv import load_dotenv
 
-# ─── Configuration ────────────────────────────────────────────────────────────
+# Load .env from the project root (two levels up from this file) so the CLI
+# picks up environment variables when run locally without any shell export.
+load_dotenv()
 
-REGION: str = "us-east-1"
+# ─── Configuration (loaded from .env / environment) ──────────────────────────
 
-RUNTIME_ARN: str = (
-    "arn:aws:bedrock-agentcore:us-east-1:042989515908:runtime/expensemanagementai-ftUjYU5lAr"
-)
+REGION: str = os.getenv("AGENTCORE_REGION", "us-east-1")
+
+RUNTIME_ARN: str = os.getenv("AGENTCORE_RUNTIME_ARN", "")
+
+if not RUNTIME_ARN:
+    raise OSError(
+        "AGENTCORE_RUNTIME_ARN is not set.\n"
+        "Add it to your .env file:\n"
+        "  AGENTCORE_RUNTIME_ARN=arn:aws:bedrock-agentcore:<3region>:<account>:runtime/<name>"
+    )
 
 
 # ─── Typed response ───────────────────────────────────────────────────────────
