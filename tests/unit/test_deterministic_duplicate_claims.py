@@ -84,6 +84,11 @@ def _build_service(repository: FakeExpenseClaimRepository) -> ExpenseClaimServic
     service.policy_service.get_policy = lambda category_id, employee_grade: _policy(
         category_id, employee_grade
     )
+    # Bypass travel validation in these tests: they test duplicate-detection /
+    # business-key logic only.  Trip dates are fixed past dates that would
+    # otherwise trigger SUBMISSION_WINDOW_EXPIRED.  Travel validation has its
+    # own dedicated test suite (test_travel_validation_service.py).
+    service.travel_validation_service.validate_before_submission = lambda **kwargs: None
     return service
 
 

@@ -57,6 +57,7 @@ from services.base import BaseService
 from services.employee_service import EmployeeService
 from services.expense_category_service import ExpenseCategoryService
 from services.expense_policy_service import ExpensePolicyService
+from services.travel_validation_service import TravelValidationService
 
 
 def _generate_claim_id() -> str:
@@ -97,6 +98,11 @@ class ExpenseClaimService(BaseService):
         self.employee_service = EmployeeService()
         self.category_service = ExpenseCategoryService()
         self.policy_service = ExpensePolicyService()
+        # Travel validation engine — shares the same repository instance
+        # so no second database connection is opened.
+        self.travel_validation_service = TravelValidationService(
+            claim_repository=self.claim_repository,
+        )
 
     ###########################################################################
     # Public API
@@ -130,6 +136,14 @@ class ExpenseClaimService(BaseService):
         self.log_start("Preview Expense Claim")
         # print(type(request))
         # print(request)
+
+        # --- Travel Validation (must run before any other validation) ---
+        self.travel_validation_service.validate_before_submission(
+            employee_id=request.employee_id,
+            trip_start_date=request.trip_start_date,
+            trip_end_date=request.trip_end_date,
+            expense_items=request.expense_items,
+        )
 
         employee = self._validate_employee(request)
         self._validate_trip_dates(request)
@@ -185,6 +199,14 @@ class ExpenseClaimService(BaseService):
         self.log_start("Submit Expense Claim")
         # print(type(request))
         # print(request)
+
+        # --- Travel Validation (must run before any other validation) ---
+        self.travel_validation_service.validate_before_submission(
+            employee_id=request.employee_id,
+            trip_start_date=request.trip_start_date,
+            trip_end_date=request.trip_end_date,
+            expense_items=request.expense_items,
+        )
 
         employee = self._validate_employee(request)
         self._validate_trip_dates(request)
