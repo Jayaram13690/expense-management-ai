@@ -536,6 +536,10 @@ class ConversationOrchestrator:
                         execution_result = self._sequential.execute_employee(self.context)
                     elif plan.next_action == "expense_preview":
                         execution_result = self._sequential.execute_expense_preview(self.context)
+                    elif plan.next_action == "allowance_validation":
+                        execution_result = self._sequential.execute_allowance_validation(
+                            self.context
+                        )
                     elif plan.next_action == "expense_submission":
                         execution_result = self._sequential.execute_expense_submission(self.context)
                     elif plan.next_action == "approval":
@@ -556,16 +560,16 @@ class ConversationOrchestrator:
 
                 self._record_execution(execution_result)
 
+                if plan.next_action == "allowance_validation":
+                    # Allowance validation passed; continue loop so planner
+                    # moves to await_confirmation (HIL).
+                    continue
+
                 if plan.next_action == "expense_preview":
-                    assistant_message = self._preview_message(execution_result or {})
-                    self.context.set_stage(ConversationState.WAITING_USER)
-                    plan = ExecutionPlan(
-                        pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
-                        next_action="await_confirmation",
-                        prompt=assistant_message,
-                        metadata={"stage": "WAITING_CONFIRMATION"},
-                    )
-                    break
+                    # expense_preview is now immediately followed by
+                    # allowance_validation (scheduled by the planner).
+                    # Continue the loop instead of breaking into HIL.
+                    continue
 
                 if plan.next_action == "receipt":
                     assistant_message = (

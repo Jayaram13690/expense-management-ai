@@ -14,6 +14,7 @@ from contracts import EmployeeProfile, PolicyCategory, PolicyContext
 from conversation.conversation_context import ConversationContext
 from conversation.execution_plan import ExecutionPattern
 from models.dto.submit_claim import SubmitExpenseClaimRequest
+from services.expense_allowance_service import ExpenseAllowanceService
 
 # Travel validation error codes that are terminal for the current submission
 # flow.  When one of these fires the collected trip data is fundamentally
@@ -50,6 +51,7 @@ class SequentialExecution:
         self.expense_agent = expense_agent
         self.approval_agent = approval_agent
         self.receipt_agent = receipt_agent
+        self._allowance_service = ExpenseAllowanceService()
 
     def execute_employee(self, context: ConversationContext) -> dict[str, Any]:
         if not context.employee_id:
@@ -112,6 +114,104 @@ class SequentialExecution:
             "stage_name": "PREVIEW",
             "claim_preview": claim_preview,
             "assistant_message": "Claim preview generated successfully.",
+            "next_state": "allowance_validation",
+        }
+
+    def execute_allowance_validation(self, context: ConversationContext) -> dict[str, Any]:
+        """
+        Validate monthly expense allowance limits for the current claim.
+
+        This stage runs AFTER Variance Calculation (expense_preview) and
+        BEFORE the Human-in-the-Loop confirmation prompt.  It validates
+        every expense category against the employee's remaining monthly
+        allowance and blocks submission when any category is exceeded.
+
+        Existing daily validation via ExpensePolicyService is unaffected.
+        Both daily (existing) and monthly (new) validations must pass.
+        """
+        employee_profile = context.employee_profile or context.get_execution_result(
+            "employee_profile"
+        )
+        if not isinstance(employee_profile, EmployeeProfile):
+            return self._error_result(
+                stage_name="ALLOWANCE_VALIDATION",
+                error_code="EMPLOYEE_PROFILE_MISSING",
+                assistant_message="Employee profile is required before allowance validation.",
+                recoverable=False,
+            )
+
+        employee_id = str(employee_profile.employee_id or context.employee_id or "")
+        employee_grade = str(employee_profile.employee_grade or "")
+
+        if not employee_id or not employee_grade:
+            return self._error_result(
+                stage_name="ALLOWANCE_VALIDATION",
+                error_code="EMPLOYEE_DATA_INCOMPLETE",
+                assistant_message="Employee ID and grade are required for allowance validation.",
+                recoverable=False,
+            )
+
+        expense_items = [
+            {
+                "category_code": item.get("category_code"),
+                "requested_amount": item.get("requested_amount", Decimal("0.00")),
+            }
+            for item in context.expense_items
+            if isinstance(item, Mapping) and item.get("category_code")
+        ]
+
+        if not expense_items:
+            # No expense items to validate — skip gracefully
+            return {
+                "success": True,
+                "pattern": ExecutionPattern.SEQUENTIAL.value,
+                "stage_name": "ALLOWANCE_VALIDATION",
+                "assistant_message": "Allowance Validation Passed — no expense items to validate.",
+                "next_state": "confirmation",
+            }
+
+        try:
+            results = self._allowance_service.validate_claim_allowance(
+                employee_id=employee_id,
+                employee_grade=employee_grade,
+                expense_items=expense_items,
+            )
+        except Exception as exc:
+            return self._error_result(
+                stage_name="ALLOWANCE_VALIDATION",
+                error_code=getattr(exc, "error_code", "ALLOWANCE_VALIDATION_ERROR"),
+                assistant_message=(
+                    f"Allowance validation could not be completed: {exc}. "
+                    "Please contact support if this problem persists."
+                ),
+                recoverable=False,
+            )
+
+        exceeded = [r for r in results if r.exceeded]
+        if exceeded:
+            details = "\n".join(r.validation_message for r in exceeded)
+            return self._error_result(
+                stage_name="ALLOWANCE_VALIDATION",
+                error_code="MONTHLY_ALLOWANCE_EXCEEDED",
+                assistant_message=(
+                    "Expense Allowance Validation Failed.\n\n"
+                    f"{details}\n\n"
+                    "Please modify your expenses and try again."
+                ),
+                recoverable=True,
+            )
+
+        context.store_execution_result(
+            "allowance_validation_results",
+            [r.summary_dict() for r in results],
+        )
+
+        return {
+            "success": True,
+            "pattern": ExecutionPattern.SEQUENTIAL.value,
+            "stage_name": "ALLOWANCE_VALIDATION",
+            "allowance_validation_results": [r.summary_dict() for r in results],
+            "assistant_message": "Allowance Validation Passed — all categories within monthly limits.",
             "next_state": "confirmation",
         }
 
@@ -539,16 +639,21 @@ class HumanInTheLoopExecution:
         variance = self._format_variance(claimed_amount, approved_amount)
         warnings = self._lookup(preview, "warnings", default=[])
         policy_limits = self._policy_limits_summary(context)
+        allowance_summary = self._allowance_summary(context)
 
-        return (
+        prompt = (
             "Claim Summary\n"
             f"Claimed Amount: {claimed_amount}\n"
             f"Approved Amount: {approved_amount}\n"
             f"Variance: {variance}\n"
             f"Warnings: {self._format_warnings(warnings)}\n"
-            f"Applied Policy Limits: {policy_limits}\n\n"
-            "Do you want to submit?"
+            f"Applied Policy Limits: {policy_limits}\n"
         )
+        if allowance_summary:
+            prompt += f"Monthly Allowance Status: {allowance_summary}\n"
+        prompt += "\nDo you want to submit?"
+        return prompt
+
 
     def interpret(self, message: str) -> bool | None:
         normalized = message.strip().lower()
@@ -618,6 +723,23 @@ class HumanInTheLoopExecution:
             parts.append(f"{category}: {limit_bits}")
 
         return "; ".join(parts) if parts else "No policy limits available"
+
+    def _allowance_summary(self, context: ConversationContext) -> str:
+        """Format allowance validation results for the confirmation prompt."""
+        allowance_results = context.get_execution_result("allowance_validation_results")
+        if not isinstance(allowance_results, list) or not allowance_results:
+            return ""
+
+        parts: list[str] = []
+        for item in allowance_results:
+            if not isinstance(item, Mapping):
+                continue
+            code = item.get("category_code", "")
+            remaining = item.get("remaining", "N/A")
+            currency = item.get("currency", "INR")
+            parts.append(f"{code}: {currency} {remaining} remaining")
+
+        return "; ".join(parts) if parts else ""
 
 
 __all__ = ["SequentialExecution", "ParallelExecution", "HumanInTheLoopExecution"]

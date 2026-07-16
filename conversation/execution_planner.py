@@ -89,6 +89,17 @@ class ExecutionPlanner:
                 metadata={"stage": "PREVIEW", "tasks": ["expense_preview"]},
             )
 
+        # Allowance Validation — runs once after preview, before HIL confirmation
+        if context.execution_results.get("allowance_validation_results") is None:
+            return ExecutionPlan(
+                pattern=ExecutionPattern.SEQUENTIAL,
+                next_action="allowance_validation",
+                metadata={
+                    "stage": "ALLOWANCE_VALIDATION",
+                    "tasks": ["allowance_validation"],
+                },
+            )
+
         if context.confirmation is None:
             return ExecutionPlan(
                 pattern=ExecutionPattern.HUMAN_IN_THE_LOOP,
