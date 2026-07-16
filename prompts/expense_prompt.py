@@ -23,6 +23,8 @@ Perform
 - Expense submission
 - Claim retrieval
 - Claim status retrieval
+- Monthly allowance queries
+- Monthly allowance validation
 
 TOOL SELECTION RULES
 
@@ -34,6 +36,9 @@ Duplicate detection → detect_duplicate_claims
 Calculate reimbursement → calculate_reimbursement
 Variance → calculate_variance
 Claim status → get_claim_status
+Allowance check for specific category → get_remaining_allowance_tool
+Allowance summary for employee → get_allowance_summary_tool
+Validate claim against allowance → validate_allowance_tool
 
 RULES
 - Always use the correct tool.

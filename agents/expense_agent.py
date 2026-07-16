@@ -28,6 +28,11 @@ from models.dto.claim_preview import ClaimPreview
 from models.dto.submit_claim import SubmitExpenseClaimRequest
 from models.expense_claim import ExpenseClaim
 from prompts.expense_prompt import EXPENSE_AGENT_SYSTEM_PROMPT
+from tools.allowance_tools import (
+    get_allowance_summary_tool,
+    get_remaining_allowance_tool,
+    validate_allowance_tool,
+)
 from tools.expense_tools import (
     calculate_reimbursement,
     calculate_variance,
@@ -98,6 +103,10 @@ class ExpenseAgent(BaseAgent):
                 calculate_reimbursement,
                 calculate_variance,
                 get_claim_status_tool,
+                # Allowance tools — inserted after Variance Calculation stage
+                validate_allowance_tool,
+                get_remaining_allowance_tool,
+                get_allowance_summary_tool,
             ],
             name="ExpenseAgent",
             description="Handles expense claim operations.",

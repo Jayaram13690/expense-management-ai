@@ -22,6 +22,7 @@ class CoordinatorAgent(BaseAgent):
         "CHECK_CLAIM_STATUS",
         "POLICY_QUERY",
         "EMPLOYEE_QUERY",
+        "ALLOWANCE_QUERY",
         "APPROVAL_QUERY",
         "RECEIPT_QUERY",
         "GREETING",
@@ -104,6 +105,8 @@ class CoordinatorAgent(BaseAgent):
                 message, extracted_data=extracted_data
             )
         if intent == "CHECK_CLAIM_STATUS":
+            return self.expense_agent.invoke(message)
+        if intent == "ALLOWANCE_QUERY":
             return self.expense_agent.invoke(message)
         if intent == "POLICY_QUERY":
             return self.policy_agent.invoke(message)
@@ -357,7 +360,7 @@ class CoordinatorAgent(BaseAgent):
             "Return a JSON object with keys intent and confidence.\n"
             "Return exactly one intent from:\n"
             "SUBMIT_EXPENSE_CLAIM, CHECK_CLAIM_STATUS, POLICY_QUERY, EMPLOYEE_QUERY,\n"
-            "APPROVAL_QUERY, RECEIPT_QUERY, LIST_EMPLOYEE_CLAIMS, LIST_PENDING_APPROVALS,\n"
+            "ALLOWANCE_QUERY, APPROVAL_QUERY, RECEIPT_QUERY, LIST_EMPLOYEE_CLAIMS, LIST_PENDING_APPROVALS,\n"
             "GREETING, OUTOFSCOPE.\n"
             "Do not answer the user's question. Do not perform business reasoning.\n\n"
             """Intent definitions and examples:\n
@@ -366,6 +369,9 @@ class CoordinatorAgent(BaseAgent):
             Examples: 'Show my claims', 'List my claims', 'Expense history', 'Claims of EMP0007',
             'Previous claims', 'Travel claims', 'Employee expense history'.\n
             Do NOT classify these as EMPLOYEE_QUERY.\n"""
+            """- ALLOWANCE_QUERY: User wants to check remaining or consumed monthly expense allowance limits.\n
+            Examples: 'How much hotel allowance left', 'What is my remaining meals allowance',
+            'Allowance for EMP0002'.\n"""
             """- LIST_PENDING_APPROVALS: Manager wants to retrieve claims awaiting approval.\n
             - Examples: 'Pending approvals', 'Approval queue', 'Pending claims', 
             'Claims waiting approval', 'Requests awaiting approval', 'Show manager approval queue'.

@@ -32,6 +32,7 @@ class ConversationIntent(StrEnum):
     SUBMIT_EXPENSE_CLAIM = "submit_expense_claim"
     PREVIEW_EXPENSE_CLAIM = "preview_expense_claim"
     GET_EXPENSE_CLAIM = "get_expense_claim"
+    ALLOWANCE_QUERY = "allowance_query"
 
     # Receipt Operations
     UPLOAD_RECEIPT = "upload_receipt"

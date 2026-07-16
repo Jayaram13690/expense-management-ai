@@ -15,6 +15,12 @@ All tools are thin delegation layers that:
 - Follow Strands Agents SDK patterns
 """
 
+# Allowance Tools
+from .allowance_tools import (
+    get_allowance_summary_tool,
+    get_remaining_allowance_tool,
+    validate_allowance_tool,
+)
 # Approval Tools
 from .approval_tools import (
     approve_claim,
@@ -95,6 +101,10 @@ __all__ = [
     "list_manager_queue",
     "get_approval_history",
     "get_approval_status",
+    # Allowance Tools
+    "validate_allowance_tool",
+    "get_remaining_allowance_tool",
+    "get_allowance_summary_tool",
     # Receipt Tools
     "upload_receipt",
     "get_receipt_status",
